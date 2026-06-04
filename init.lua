@@ -4,6 +4,7 @@ local mq     = require('mq')
 local Write  = require('muleassist.Write')
 local config = require('muleassist.config')
 local state  = require('muleassist.state')
+local cast   = require('muleassist.cast')
 
 local function find_config_path(server, char)
   local cfgdir = mq.TLO.MacroQuest.Path('config')() or '.'
@@ -27,6 +28,8 @@ local function main(...)
   local st = state.new(cfg)
   if args[1] and args[1] ~= '' then st.role = args[1] end
   if args[2] and args[2] ~= '' then st.main_assist = args[2] end
+
+  cast.gem_stuck_ability = cfg:get('General', 'GemStuckAbility', nil)
 
   Write.Info('MuleAssist-Lua loaded. Role=%s MA=%s AssistAt=%d',
     st.role, tostring(st.main_assist), cfg:num('Melee', 'AssistAt', 95))
