@@ -5,6 +5,7 @@ local mods = {
   'muleassist.tests.test_config',
   'muleassist.tests.test_state',
   'muleassist.tests.test_cond',
+  'muleassist.tests.test_heal',
 }
 
 local ok_all = true
