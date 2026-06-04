@@ -32,6 +32,16 @@ local function main(...)
   if args[2] and args[2] ~= '' then st.main_assist = args[2] end
 
   cast.gem_stuck_ability = cfg:get('General', 'GemStuckAbility', nil)
+  cast.misc_gem       = cfg:num('General', 'MiscGem',       8)
+  cast.misc_gem_lw    = cfg:num('General', 'MiscGemLW',     0)
+  cast.misc_gem_remem = cfg:num('General', 'MiscGemRemem',  1)
+  -- Capture whatever currently occupies the scratch gems so we can re-mem after a swap
+  -- (macro @804-805; re-captured @18301 after spellset load — we have no static loadout
+  -- port yet, so this is the live gem at startup).
+  cast.remem_misc_gem = mq.TLO.Me.Gem(cast.misc_gem).Name()
+  if cast.misc_gem_lw > 0 then
+    cast.remem_misc_gem_lw = mq.TLO.Me.Gem(cast.misc_gem_lw).Name()
+  end
   heal.setup(st)
 
   Write.Info('MuleAssist-Lua loaded. Role=%s MA=%s AssistAt=%d',

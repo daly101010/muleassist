@@ -11,6 +11,19 @@ local cast  = {}
 -- init.lua sets this from config; nil/'' disables the recovery path.
 cast.gem_stuck_ability = nil
 
+-- Spell-memorization scratch gem (General/MiscGem*, INI defaults 8/0/1). init.lua sets
+-- these from config and captures the live gem occupants once at startup. Runtime swap
+-- bookkeeping mirrors the macro's ReMem* outer vars.
+cast.misc_gem        = 8      -- General/MiscGem     : scratch slot for short-recast spells
+cast.misc_gem_lw     = 0      -- General/MiscGemLW   : scratch slot for >30s-recast spells (0=off)
+cast.misc_gem_remem  = 1      -- General/MiscGemRemem: re-mem original occupant after cast
+cast.remem_misc_gem    = nil  -- name originally in misc_gem    (captured at init)
+cast.remem_misc_gem_lw = nil  -- name originally in misc_gem_lw (captured at init)
+cast.remem_wait_short  = 'null'
+cast.remem_wait_long   = 'null'
+cast.remem_cast        = 0
+cast.remem_cast_lw     = 0
+
 local function spell(name) return mq.TLO.Spell(name) end
 
 -- Sub IsDisc @4646: a skill-based, lasting ability that doesn't stack with discs
@@ -55,6 +68,61 @@ function cast.will_it_stick(what, target_id)
   return true
 end
 
+-- Sub MemSpell @17866: ensure spellbook spell `pgem` occupies gem slot `i`, clearing the
+-- current occupant first. force_it ~= 0 forces a re-mem even if `pgem` is already in some
+-- gem (force_it carries the slot index it currently sits in). sent_from suppresses the
+-- mid-mem hostile bail when it contains 'Heal'.
+-- Bounded waits mirror the macro's decisecond timers: ~2s to clear a slot, ~30s to mem.
+function cast.mem_spell(pgem, i, force_it, sent_from)
+  force_it  = force_it or 0
+  sent_from = sent_from or ''
+  if not pgem or pgem == '' or pgem == 'null' or i == 0 then return end
+  if (mq.TLO.Me.Gem(pgem)() or 0) > 0 and force_it == 0 then return end
+
+  -- GetHostilesOnXTarget bail (macro @17880/17897/17910). Inert until Phase 4 combat.
+  local function hostiles() return false end
+
+  if force_it ~= 0 and (mq.TLO.Me.Gem(pgem)() or 0) > 0 and i ~= force_it then
+    mq.cmdf('/notify CastSpellWnd CSPW_Spell%d rightmouseup', force_it - 1)
+    local t = os.clock() + 2
+    while os.clock() < t do
+      if (mq.TLO.Me.Gem(i).ID() or 0) == 0 then break end
+      if hostiles() then return end
+      mq.delay(1)
+    end
+  end
+
+  if mq.TLO.Me.Book(pgem)() then
+    -- Clear the target slot if occupied.
+    if (mq.TLO.Me.Gem(i).ID() or 0) > 0 then
+      mq.cmdf('/notify CastSpellWnd CSPW_Spell%d rightmouseup', i - 1)
+      local t = os.clock() + 2
+      while os.clock() < t do
+        if (mq.TLO.Me.Gem(i).ID() or 0) == 0 then break end
+        if hostiles() and not sent_from:find('Heal') then return end
+        mq.delay(1)
+      end
+    end
+    -- Mem if not already the right spell in this slot.
+    local cur = mq.TLO.Me.Gem(i).Name()
+    if not cur or cur ~= pgem then
+      Write.Debug('MemSpell: memming %s into gem %d', pgem, i)
+      mq.cmdf('/memspell %d "%s"', i, pgem)
+      local t = os.clock() + 30
+      while os.clock() < t do
+        if mq.TLO.Me.Gem(i).Name() == pgem then break end
+        if hostiles() and not sent_from:find('Heal') then return end
+        mq.delay(1)
+      end
+    end
+  else
+    Write.Warn('Could not find the spell %s in your spell book.', tostring(pgem))
+  end
+
+  if mq.TLO.Me.CombatState() == 'COMBAT' then mq.delay(300) end
+  if mq.TLO.Window('SpellBookWnd').Open() then mq.cmd('/windowstate spellbookwnd close') end
+end
+
 -- Sub Cast @5275: rank-downgrade, conditional target, gem-ready wait, cast-retry loop.
 function cast.cast(what, sent_from, target_id)
   Write.Debug('Cast: %s (%s)', what, tostring(sent_from))
@@ -81,6 +149,32 @@ function cast.cast(what, sent_from, target_id)
     end
   end
 
+  -- Spell memorization swap (CastWhat @5092-5137). Only real spellbook spells can be
+  -- memmed; AAs/items/skills fall through untouched (Sub Cast then /casts them as-is).
+  if mq.TLO.Me.Book(what)() and not mq.TLO.Me.Gem(what)() then
+    -- Combat guard (@5097, simplified to CombatState until Phase 4): don't mem mid-combat
+    -- unless this is a heal.
+    if mq.TLO.Me.CombatState() == 'COMBAT' and not tostring(sent_from):find('Heal') then
+      Write.Debug('Cast: %s not memmed and in combat; skipping mem (Midcombat)', what)
+      return 'Midcombat'
+    end
+    if mq.TLO.Cursor.ID() then mq.cmd('/autoinventory') end
+
+    local recast = spell(what).RecastTime.TotalSeconds() or 0
+    if cast.misc_gem_remem ~= 0 and cast.misc_gem_lw > 0 and recast > 30
+       and cast.remem_wait_long == 'null' then
+      -- Long-recast spell -> dedicated LW scratch gem; mem and return (re-mem next pass).
+      cast.remem_wait_long = what
+      cast.mem_spell(what, cast.misc_gem_lw, 0, sent_from)
+      return 'CAST_NO_RESULT'
+    end
+
+    -- Short-recast path: mem into MiscGem, then fall through to the gem-ready wait + cast.
+    cast.remem_wait_short = what
+    cast.mem_spell(what, cast.misc_gem, 0, sent_from)
+    mq.delay(15000, function() return (mq.TLO.Me.GemTimer(what)() or 0) ~= 0 end)
+  end
+
   -- Gem-ready wait (lines 5301-5302).
   mq.delay(2000, function() return mq.TLO.Me.SpellReady(what)() end)
   if not mq.TLO.Me.SpellReady(what)() and mq.TLO.Me.CombatState() == 'COMBAT' then return end
@@ -101,7 +195,44 @@ function cast.cast(what, sent_from, target_id)
     mq.delay(500, function() return mq.TLO.Me.Casting.ID() ~= nil end)
   end
 
-  return cast.wait_cast(sent_from, spell(what).MyCastTime() or 0, what)
+  local result = cast.wait_cast(sent_from, spell(what).MyCastTime() or 0, what)
+
+  -- Re-mem the spell originally in the scratch gem (CastWhat @5208-5241). Gated on
+  -- MiscGemRemem; only out of combat, no Resurrection Sickness, and not a '-nomem' call.
+  if cast.misc_gem_remem ~= 0 then
+    local sf = tostring(sent_from)
+    if result == 'CAST_SUCCESS' then
+      if what == cast.remem_wait_short then cast.remem_cast = 1
+      elseif what == cast.remem_wait_long then cast.remem_cast_lw = 1 end
+    end
+    local sick   = mq.TLO.Me.Buff('Resurrection Sickness').ID() ~= nil
+    local combat = mq.TLO.Me.CombatState() == 'COMBAT'
+    local nomem  = sf:find('%-nomem') ~= nil
+
+    if (cast.misc_gem_remem == 1 or cast.misc_gem_remem == 2)
+       and cast.remem_misc_gem and not mq.TLO.Me.Gem(cast.remem_misc_gem)()
+       and cast.remem_cast == 1 and not combat and not sick and not nomem then
+      if not sf:find('Heal') then
+        cast.mem_spell(cast.remem_misc_gem, cast.misc_gem, 0)
+      end
+      cast.remem_cast = 0
+      cast.remem_wait_short = 'null'
+    end
+
+    if (cast.misc_gem_remem == 1 or cast.misc_gem_remem == 3)
+       and cast.misc_gem_lw > 0 and cast.remem_wait_long ~= 'null' and not nomem then
+      if cast.remem_cast_lw == 1 and not sick then
+        if cast.remem_misc_gem_lw then
+          cast.mem_spell(cast.remem_misc_gem_lw, cast.misc_gem_lw,
+                         mq.TLO.Me.Gem(cast.remem_misc_gem_lw)() or 0)
+        end
+        cast.remem_cast_lw = 0
+        cast.remem_wait_long = 'null'
+      end
+    end
+  end
+
+  return result
 end
 
 -- Sub WaitCast @4485 (core): block until the active cast resolves; handle bard songs,
