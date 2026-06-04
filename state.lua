@@ -27,7 +27,7 @@ function state.new(cfg)
   st.timers = {} -- name -> deadline; populated by modules at runtime
 
   -- Optional callbacks wired by later phases (nil = skip): oh_shit, custom_func,
-  -- write_debuffs, rez_check (Phase 2b), etc.
+  -- write_debuffs, etc.
   st.hooks = {}
   -- Combat globals filled in Phase 4 (aggro_target_id, my_target_id, combat_start,
   -- pulled, ...). nil fields make heal.lua's combat branches no-op until then.
@@ -43,6 +43,15 @@ function state.new(cfg)
     interrupt    = cfg:num('Heals', 'InterruptHeals', 100),
     duration_mod = cfg:num('General', 'DurationMod', 1),
     cond_on      = cfg:bool('General', 'ConditionsOn', true) and cfg:bool('Heals', 'HealsCOn', true),
+  }
+
+  st.rez = {
+    auto          = cfg:num('Heals', 'AutoRezOn', 0),     -- 0 off, 1 always(no-aggro), 2 after-combat
+    with          = cfg:get('Heals', 'AutoRezWith', nil), -- spell/AA/item name
+    radius        = 150,                                   -- macro RezRadius const
+    battle_timers = {},                                    -- [groupSlot] = os.clock() deadline
+    ooc_timers    = {},                                    -- [corpseSpawnID] = os.clock() deadline
+    mount_on      = cfg:bool('General', 'MountOn', true),  -- CastMount deferred to Phase 5
   }
 
   st.main_assist    = cfg:get('General', 'MainAssist', nil)

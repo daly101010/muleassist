@@ -24,6 +24,11 @@ function t.run()
   assert(type(st.combat) == 'table', 'st.combat missing')
   assert(st.flags.buff_mode == false, 'buff_mode default')
 
+  assert(type(st.rez) == 'table', 'st.rez missing')
+  assert(st.rez.radius == 150, 'rez radius const')
+  assert(type(st.rez.battle_timers) == 'table', 'battle_timers missing')
+  assert(type(st.rez.ooc_timers) == 'table', 'ooc_timers missing')
+
   print('test_state: PASS')
   return true
 end
