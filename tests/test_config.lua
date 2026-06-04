@@ -21,6 +21,16 @@ function t.run()
   -- DPSCond1 should be carried
   assert(dps[1].cond and dps[1].cond:find('PctMana'), 'dps[1].cond not parsed')
 
+  -- args[] exposes every pipe field (the macro's .Arg[n,|])
+  local heals = cfg:list('heals')
+  assert(#heals >= 1, 'no heals in fixture')
+  assert(type(heals[1].args) == 'table', 'heals[1].args missing')
+  assert(heals[1].args[1] == heals[1].spell, 'args[1] should equal spell')
+  -- Heals2=Complete Healing|60|MA -> three fields
+  local h2
+  for _, e in ipairs(heals) do if e.spell == 'Complete Healing' then h2 = e end end
+  assert(h2 and h2.args[2] == '60' and h2.args[3] == 'MA', 'three-field split failed')
+
   print('test_config: PASS ('..#dps..' dps entries)')
   return true
 end

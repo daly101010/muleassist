@@ -17,6 +17,13 @@ function t.run()
   assert(st.camp and st.camp.radius == cfg:num('General', 'CampRadius', 60), 'camp radius mismatch')
   assert(type(st.lists.dps) == 'table', 'dps list not attached')
 
+  assert(type(st.heal) == 'table', 'st.heal missing')
+  assert(st.heal.duration_mod ~= nil, 'duration_mod missing')
+  assert(type(st.heal.timers) == 'table', 'heal.timers missing')
+  assert(type(st.hooks) == 'table', 'st.hooks missing')
+  assert(type(st.combat) == 'table', 'st.combat missing')
+  assert(st.flags.buff_mode == false, 'buff_mode default')
+
   print('test_state: PASS')
   return true
 end

@@ -42,6 +42,13 @@ local function split_pipe(s)
   return trim(s), nil
 end
 
+-- All pipe-delimited fields, trimmed (the macro's .Arg[n,|] access).
+local function split_args(s)
+  local out = {}
+  for field in (s .. '|'):gmatch('([^|]*)|') do out[#out + 1] = trim(field) end
+  return out
+end
+
 local cfg_mt = {}
 cfg_mt.__index = cfg_mt
 function cfg_mt:get(section, key, dflt)
@@ -72,7 +79,7 @@ function cfg_mt:list(name)
     if raw and trim(raw) ~= '' and trim(raw):upper() ~= 'NULL' then
       local spell, param = split_pipe(raw)
       local condstr = def.cond and self:get(def.section, def.cond..i, nil) or nil
-      out[#out+1] = { spell=spell, param=param, cond=condstr, raw=raw, index=i }
+      out[#out+1] = { spell=spell, param=param, args=split_args(raw), cond=condstr, raw=raw, index=i }
     end
   end
   self._lists[name] = out
