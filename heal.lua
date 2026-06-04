@@ -1,7 +1,8 @@
 -- muleassist/heal.lua
 -- Phase 2a: healing core. Ports FindSingleHeals @14767, FindGroupHeals @14830,
 -- CheckHealth @9363, SingleHeal @9521, DoGroupHealStuff @9841, DoPetHealStuff @9892.
--- Rez (RezCheck) + healer coordination (CheckHealer) are Phase 2b (st.hooks.rez_check).
+-- Rez (RezCheck) is Phase 2b, wired as its own init main-loop slot (rez.lua); healer
+-- coordination (CheckHealer) is deferred to Phase 5 (pull gate, no heal logic).
 -- Combat-only branches (Tap/Mob/assist) are ported structurally but guarded on
 -- st.combat.* (nil until Phase 4) so they no-op until combat lands.
 local mq    = require('mq')
@@ -366,9 +367,6 @@ function heal.tick(st)
           heal.single(st, ma, mat, maspawn.PctHPs(), 0, st.main_assist_id)
         end
       end
-
-      -- rez (Phase 2b)
-      if st.hooks.rez_check then st.hooks.rez_check() end
 
       -- most-hurt group member (mode 1 or 2)
       if (mode == 1 or mode == 2) and mq.TLO.Group() then

@@ -6,6 +6,7 @@ local config = require('muleassist.config')
 local state  = require('muleassist.state')
 local cast   = require('muleassist.cast')
 local heal   = require('muleassist.heal')
+local rez    = require('muleassist.rez')
 
 local function find_config_path(server, char)
   local cfgdir = mq.TLO.MacroQuest.Path('config')() or '.'
@@ -42,9 +43,11 @@ local function main(...)
 
   while st.running do
     mq.doevents()
-    -- Macro main-loop order: state -> move -> heal -> buff -> DPS. Phase 2a wires
-    -- the heal tick (CheckHealth's slot); later phases insert their ticks around it.
+    -- Macro main-loop order: state -> move -> heal -> rez -> buff -> DPS. Later
+    -- phases insert their ticks around these. rez.check is its own loop slot
+    -- (Sub Main @1561), independent of HealsOn, gated internally on AutoRezOn.
     heal.tick(st)
+    if st.rez.auto ~= 0 then rez.check(st) end
     mq.delay(250)
   end
 
