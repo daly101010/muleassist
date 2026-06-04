@@ -98,7 +98,7 @@ function cast.cast(what, sent_from, target_id)
   until not stuck
 
   if (spell(what).MyCastTime() or 0) ~= 0 then
-    mq.delay(500, function() return mq.TLO.Me.Casting.ID() end)
+    mq.delay(500, function() return mq.TLO.Me.Casting.ID() ~= nil end)
   end
 
   return cast.wait_cast(sent_from, spell(what).MyCastTime() or 0, what)
