@@ -72,8 +72,9 @@ function cfg_mt:list(name)
   if self._lists[name] then return self._lists[name] end
   local out = {}
   local size = self:num(def.section, def.size, 0)
-  -- size can be 0 while entries exist; scan up to max(size, 50)
-  local maxn = math.max(size, 50)
+  -- Respect an explicit Size as the cap: entries beyond it are disabled (matches the macro,
+  -- which loops 1..Section.Size). Fall back to scanning 50 only when Size is unset/0.
+  local maxn = (size > 0) and size or 50
   for i = 1, maxn do
     local raw = self:get(def.section, def.prefix..i, nil)
     if raw and trim(raw) ~= '' and trim(raw):upper() ~= 'NULL' then
