@@ -14,6 +14,13 @@ local utils = require('muleassist.ui.utils')
 local filedialog = require('muleassist.ui.lib.imguifiledialog')
 local cache = require('muleassist.ui.lib.cache')
 local serialize = require('muleassist.serialize')
+local diff = require('muleassist.ui.diff')
+
+local M = {}                 -- module export (mount/toggle for embedding)
+local apply_opts = nil       -- set by M.mount; holds on_apply callback
+local cfg_snapshot = nil     -- last-applied snapshot of globals.Config
+local apply_db = diff.debouncer(0.75)
+local trees_built = false
 
 globals.CurrentSchema = 'ma'
 globals.Schema = require('muleassist.ui.schemas.'..globals.CurrentSchema)
@@ -1520,6 +1527,19 @@ local MAUI = function()
     end
     ImGui.End()
     if used_theme then pop_styles() end
+    -- Live-apply bridge: when embedded, debounce config edits -> flush INI -> reapply.
+    if apply_opts and globals.Config then
+        local now = os.clock()
+        if not cfg_snapshot then cfg_snapshot = diff.snapshot(globals.Config) end
+        if diff.changed(globals.Config, cfg_snapshot) then
+            cfg_snapshot = diff.snapshot(globals.Config)
+            apply_db:touch(now)
+        end
+        if apply_db:due(now) then
+            local ok = pcall(Save)             -- flush globals.Config -> bot INI (LIP)
+            if ok and apply_opts.on_apply then apply_opts.on_apply() end
+        end
+    end
 end
 
 local function CheckGameState()
@@ -1565,41 +1585,69 @@ local function NewSpellMemmed(line, spell)
     SortSpellMap()
 end
 
--- Load INI into table as well as raw content
-globals.INIFile = globals.MAUI_Config['INIFile'] or utils.FindINIFile()
-if globals.INIFile and utils.FileExists(mq.configDir..'/'..globals.INIFile) then
-    globals.Config = LIP.load(mq.configDir..'/'..globals.INIFile)
-    globals.INIFileContents = utils.ReadRawINIFile()
-    globals.INILoadError = ''
-else
-    globals.INIFile = globals.Schema['INI_PATTERNS']['level']:format(globals.MyServer, globals.MyName, globals.MyLevel)
-    globals.Config = {}
+local function load_bot_ini()
+    globals.INIFile = globals.MAUI_Config['INIFile'] or utils.FindINIFile()
+    if globals.INIFile and utils.FileExists(mq.configDir..'/'..globals.INIFile) then
+        globals.Config = LIP.load(mq.configDir..'/'..globals.INIFile)
+        globals.INIFileContents = utils.ReadRawINIFile()
+        globals.INILoadError = ''
+    else
+        globals.INIFile = globals.Schema['INI_PATTERNS']['level']:format(globals.MyServer, globals.MyName, globals.MyLevel)
+        globals.Config = {}
+    end
 end
 
-mq.bind('/maui', BindMaui)
-
-mq.event('NewSpellMemmed', '#*#You have finished scribing #1#.', NewSpellMemmed)
-
-mq.imgui.init('MuleAssist', MAUI)
-
-local init_done = false
-while not terminate do
-    CheckGameState()
-    mq.doevents()
-    if not init_done then
-        InitSpellTree()
-        InitAATree()
-        InitDiscTree()
-        init_done = true
-    end
-    if memspell then
-        local rankname = mq.TLO.Spell(memspell).RankName()
-        mq.cmdf('/memspell %s "%s"', memgem, rankname)
-        mq.delay('3s', function() return mq.TLO.Me.Gem(memgem)() and mq.TLO.Me.Gem(memgem).Name() == rankname end)
-        mq.TLO.Window('SpellBookWnd').DoClose()
-        memspell = nil
-        memgem = 0
-    end
-    tloCache:clean()
-    mq.delay(20)
+local function build_trees()
+    if trees_built then return end
+    InitSpellTree(); InitAATree(); InitDiscTree()
+    trees_built = true
 end
+
+-- Embed entry: host the panel inside another script (the bot). No keep-alive loop.
+function M.mount(opts)
+    apply_opts = opts or {}
+    load_bot_ini()
+    cfg_snapshot = diff.snapshot(globals.Config)
+    open = true
+    mq.imgui.init(apply_opts.window or 'MuleAssist', function()
+        build_trees()
+        MAUI()
+    end)
+end
+
+function M.toggle() open = not open end
+function M.show()   open = true  end
+
+-- Standalone entry: original /lua run muleassist/ui behavior (own loop + binds).
+function M.run_standalone()
+    load_bot_ini()
+    mq.bind('/maui', BindMaui)
+    mq.event('NewSpellMemmed', '#*#You have finished scribing #1#.', NewSpellMemmed)
+    mq.imgui.init('MuleAssist', MAUI)
+
+    local init_done = false
+    while not terminate do
+        CheckGameState()
+        mq.doevents()
+        if not init_done then
+            InitSpellTree(); InitAATree(); InitDiscTree()
+            init_done = true
+        end
+        if memspell then
+            local rankname = mq.TLO.Spell(memspell).RankName()
+            mq.cmdf('/memspell %s "%s"', memgem, rankname)
+            mq.delay('3s', function() return mq.TLO.Me.Gem(memgem)() and mq.TLO.Me.Gem(memgem).Name() == rankname end)
+            mq.TLO.Window('SpellBookWnd').DoClose()
+            memspell = nil
+            memgem = 0
+        end
+        tloCache:clean()
+        mq.delay(20)
+    end
+end
+
+if not _G.MULEASSIST_EMBED then
+    M.run_standalone()
+end
+
+return M
