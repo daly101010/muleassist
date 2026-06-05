@@ -1,0 +1,39 @@
+-- muleassist/settings.lua
+-- Live config reload: re-read the INI from disk and re-derive all config-driven state in
+-- place, then rebuild each module's entries. Used by /mareload and the embedded MAUI panel.
+-- pcall-guarded: on any failure the running config is left untouched (reapply is a no-op).
+local config  = require('muleassist.config')
+local state   = require('muleassist.state')
+local Write   = require('muleassist.Write')
+local cast    = require('muleassist.cast')
+local heal    = require('muleassist.heal')
+local buff    = require('muleassist.buff')
+local petbuff = require('muleassist.petbuff')
+local combat  = require('muleassist.combat')
+local pull    = require('muleassist.pull')
+
+local settings = {}
+
+function settings.reapply(st)
+  local path = st.cfg and st.cfg.path
+  if not path then Write.Error('settings.reapply: no config path on st'); return false end
+
+  local cfg, err = config.load(path)
+  if not cfg then Write.Error('settings.reapply: load failed (%s)', tostring(err)); return false end
+
+  local ok, e = pcall(function()
+    state.apply_config(st, cfg)
+    -- cast scratch-gem config (mirrors init.lua startup)
+    cast.misc_gem          = cfg:num('General', 'MiscGem',      8)
+    cast.misc_gem_lw       = cfg:num('General', 'MiscGemLW',    0)
+    cast.misc_gem_remem    = cfg:num('General', 'MiscGemRemem', 1)
+    cast.gem_stuck_ability = cfg:get('General', 'GemStuckAbility', nil)
+    heal.setup(st); buff.setup(st); petbuff.setup(st); combat.setup(st); pull.setup(st)
+  end)
+  if not ok then Write.Error('settings.reapply: %s', tostring(e)); return false end
+
+  Write.Info('Settings reloaded from %s', path)
+  return true
+end
+
+return settings
