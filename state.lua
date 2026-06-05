@@ -120,9 +120,11 @@ function state.new(cfg)
   }
 
   st.med = {
-    on      = cfg:bool('General', 'MedOn', false),     -- meditate when idle/out of combat
-    start   = cfg:num('General', 'MedStart', 90),      -- sit when the med stat drops below this %
-    medding = false,                                    -- runtime: currently sitting to recover
+    on         = cfg:bool('General', 'MedOn', false),  -- meditate when idle/out of combat
+    start      = cfg:num('General', 'MedStart', 90),   -- sit when a med stat drops below this %
+    sit_to_med = cfg:bool('General', 'SitToMed', false), -- also sit between casts IN combat
+                                                         -- (non-melee chars only: healers/casters)
+    medding    = false,                                 -- runtime: currently sitting to recover
   }
 
   st.lists = {
