@@ -23,6 +23,14 @@ local function mqbool(v)
   return false  -- nil/unknown -> treat as "no" (don't stack / not ready), the safe default
 end
 
+-- Temporary diagnostics for the buff stacking issue. Toggle with /lua ... or buff.debug.
+buff.debug = true
+local function dbg(fmt, ...)
+  if buff.debug then Write.Info('[buffdbg] ' .. fmt, ...) end
+end
+-- Show a TLO result's value AND lua type, e.g. "FALSE(string)" or "true(boolean)".
+local function vt(v) return tostring(v) .. '(' .. type(v) .. ')' end
+
 -- Indirection so categorization is testable offline (overridden in tests).
 function buff._target_type(name) return (mq.TLO.Spell(name).TargetType() or '') end
 
@@ -121,27 +129,35 @@ function buff.check_group(st, en, spell_to_cast, buff_sub, spell_range)
        and not st.flags.buff_mode then return false end
     local gm = mq.TLO.Group.Member(j)
     local id = gm.ID()
+    local nm = gm.CleanName() or ('m' .. j)
     repeat
       if not id then break end
-      if (mq.TLO.Spawn(id).Distance() or 9999) >= spell_range then break end
+      if (mq.TLO.Spawn(id).Distance() or 9999) >= spell_range then dbg('p1 %s/%s skip: out of range', sb, nm); break end
       if (not ready(st, en.index, j))
-         and (mq.TLO.Spawn(id).CachedBuff(sb).Duration.TotalSeconds() or 0) > 30 then break end
-      if st.buff.cond_on and en.cond and en.cond ~= '' and not cond.eval(en.cond) then break end
+         and (mq.TLO.Spawn(id).CachedBuff(sb).Duration.TotalSeconds() or 0) > 30 then dbg('p1 %s/%s skip: timer+cached>30', sb, nm); break end
+      if st.buff.cond_on and en.cond and en.cond ~= '' and not cond.eval(en.cond) then dbg('p1 %s/%s skip: cond false', sb, nm); break end
       if en.tag == 'Me' and id ~= me_id then break end
       local short = gm.Class.ShortName() or ''
-      if not class_ok(en, short) then break end
-      if (mq.TLO.Me.CurrentMana() or 0) < (mq.TLO.Spell(spell_to_cast).Mana() or 0) then break end
+      if not class_ok(en, short) then dbg('p1 %s/%s skip: class/archetype', sb, nm); break end
+      if (mq.TLO.Me.CurrentMana() or 0) < (mq.TLO.Spell(spell_to_cast).Mana() or 0) then dbg('p1 %s/%s skip: low mana', sb, nm); break end
       if en.tag == '!MA' and id == st.main_assist_id then break end
       if en.tag == '!ME' and id == me_id then break end
 
       if id == me_id then
-        if mq.TLO.Me.Buff(sb).ID() or mq.TLO.Me.Song(sb).ID() then break end
-        if not mqbool(mq.TLO.Spell(sb).Stacks()) then break end
+        if mq.TLO.Me.Buff(sb).ID() or mq.TLO.Me.Song(sb).ID() then dbg('p1 %s/ME skip: already on me', sb); break end
+        local raw = mq.TLO.Spell(sb).Stacks()
+        dbg('p1 %s/ME Stacks=%s -> %s', sb, vt(raw), tostring(mqbool(raw)))
+        if not mqbool(raw) then break end
       else
         cache_buffs(id)
-        if (mq.TLO.Spawn(id).CachedBuff(sb).Duration.TotalSeconds() or 0) > 30 then break end
-        if not mqbool(mq.TLO.Spell(sb).StacksSpawn(id)()) then break end
+        local cd = mq.TLO.Spawn(id).CachedBuff(sb).Duration.TotalSeconds() or 0
+        if cd > 30 then dbg('p1 %s/%s skip: cached dur %s>30', sb, nm, tostring(cd)); break end
+        local raw = mq.TLO.Spell(sb).StacksSpawn(id)()
+        dbg('p1 %s/%s StacksSpawn=%s -> %s (cachedCnt=%s)', sb, nm, vt(raw), tostring(mqbool(raw)),
+            tostring(mq.TLO.Spawn(id).CachedBuffCount()))
+        if not mqbool(raw) then break end
       end
+      dbg('p1 %s/%s ADDED to cast list', sb, nm)
       list[#list + 1] = j
     until true
   end
@@ -164,8 +180,14 @@ function buff.check_group(st, en, spell_to_cast, buff_sub, spell_range)
       -- populated. Pass-1 StacksSpawn is optimistic before the target's buffs are cached
       -- (returns true), so a buff blocked by a DIFFERENT buff (e.g. the cleric's) would
       -- otherwise get memmed+cast here. StacksTarget reads the live target's buffs.
-      if mq.TLO.Target.ID() == id and not mq.TLO.Target.Buff(sb).ID()
-         and mqbool(mq.TLO.Spell(spell_to_cast).StacksTarget()) then
+      local tgtOk = mq.TLO.Target.ID() == id
+      local hasBuff = mq.TLO.Target.Buff(sb).ID()
+      local stRaw = mq.TLO.Spell(spell_to_cast).StacksTarget()
+      dbg('p2 %s/%s targetOk=%s hasBuff=%s StacksTarget=%s -> %s',
+          spell_to_cast, (gm.CleanName() or ('m'..j)), tostring(tgtOk), tostring(hasBuff),
+          vt(stRaw), tostring(mqbool(stRaw)))
+      if tgtOk and not hasBuff and mqbool(stRaw) then
+        dbg('p2 %s -> CASTING on %s', spell_to_cast, (gm.CleanName() or ('m'..j)))
         mq.delay(3000, function() return not mq.TLO.Me.SpellInCooldown() end)
         if en.mgb and mq.TLO.Me.AltAbilityReady('Mass Group Buff')() then
           mq.cmd('/alt act 35'); mq.delay(100)
@@ -194,9 +216,14 @@ function buff.check_ma(st, en, spell_range)
   local sb = silver(en.check_name)
   if st.buff.cond_on and en.cond and en.cond ~= '' and not cond.eval(en.cond) then return end
   cache_buffs(mat_id)
-  if not mqbool(mq.TLO.Spell(sb).StacksSpawn(mat_id)()) then return end
+  local maSpawnRaw = mq.TLO.Spell(sb).StacksSpawn(mat_id)()
+  dbg('ma %s StacksSpawn=%s -> %s', sb, vt(maSpawnRaw), tostring(mqbool(maSpawnRaw)))
+  if not mqbool(maSpawnRaw) then return end
   -- Authoritative stacking check against the now-targeted MA (StacksSpawn can be optimistic).
-  if mq.TLO.Target.ID() == mat_id and not mqbool(mq.TLO.Spell(en.check_name).StacksTarget()) then return end
+  local maTgtRaw = mq.TLO.Spell(en.check_name).StacksTarget()
+  dbg('ma %s targetOk=%s StacksTarget=%s -> %s', en.check_name, tostring(mq.TLO.Target.ID() == mat_id),
+      vt(maTgtRaw), tostring(mqbool(maTgtRaw)))
+  if mq.TLO.Target.ID() == mat_id and not mqbool(maTgtRaw) then return end
   if (mq.TLO.Spawn(mat_id).CachedBuff(sb).Duration() or 0) > 1000 then return end
   if not ready(st, en.index, 7) then return end
   if cast.cast(en.check_name, 'Buffs-nomem', mat_id) == 'CAST_SUCCESS' then
@@ -211,10 +238,13 @@ end
 ----------------------------------------------------------------------
 function buff.check_self(st, en)
   local sb = silver(en.check_name)
-  if mq.TLO.Me.Buff(sb).ID() or mq.TLO.Me.Song(sb).ID() then return end
-  if not mqbool(mq.TLO.Spell(sb).Stacks()) then return end
+  if mq.TLO.Me.Buff(sb).ID() or mq.TLO.Me.Song(sb).ID() then dbg('self %s skip: already on me', sb); return end
+  local raw = mq.TLO.Spell(sb).Stacks()
+  dbg('self %s Stacks=%s -> %s', sb, vt(raw), tostring(mqbool(raw)))
+  if not mqbool(raw) then return end
   if st.buff.cond_on and en.cond and en.cond ~= '' and not cond.eval(en.cond) then return end
   if not ready(st, en.index, 0) then return end
+  dbg('self %s -> CASTING on me', sb)
   if en.mgb and mq.TLO.Me.AltAbilityReady('Tranquil Blessing')() then
     mq.cmd('/alt act 992'); mq.delay(100)
   end
@@ -411,6 +441,7 @@ local function oog_try(st, en, name, id)
   if st.buff.cond_on and en.cond and en.cond ~= '' and not cond.eval(en.cond) then return false end
   if not cast.will_it_stick(name, id) then return false end
   if not oog_ready(st, id) then return false end
+  dbg('oog %s -> CASTING on %s', name, sp.CleanName() or tostring(id))
   if cast.cast(name, 'OOGBuffs-nomem', id) == 'CAST_SUCCESS' then
     oog_arm(st, id, name)
     Write.Info('OOG buffed %s on %s', name, sp.CleanName() or tostring(id))
@@ -552,13 +583,18 @@ function buff.tick(st)
       local tt  = buff._target_type(en.check_name)
       local handled = false
 
+      dbg('dispatch %s tag=%q bufftype=%s tt=%q grp=%s', en.cast_name, en.tag, tostring(en.bufftype),
+          tt, tostring(group_size() > 0))
+
       if en.tag == 'MA' or en.tag == 'DualMA' then
+        dbg('-> check_ma %s', en.cast_name)
         buff.check_ma(st, en, rng); handled = true
       end
 
       if not handled then
         local grp = group_size() > 0
         local self_only = (tt:lower() == 'self')
+        dbg('-> %s %s', (grp and not self_only) and 'check_group' or 'check_self', en.cast_name)
         if grp and not self_only then
           if buff.check_group(st, en, en.cast_name, en.check_name, rng) == false then
             break  -- hostiles abort
