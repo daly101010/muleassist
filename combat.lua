@@ -272,7 +272,9 @@ local function engage(st)
   if not mqbool(mq.TLO.Me.Combat()) then mq.cmd('/attack on'); c.attacking = true end
   if c.face_on then mq.cmd('/face fast nolook') end
   if not mqbool(mq.TLO.Stick.Active()) then
-    mq.cmdf('/stick %s id %d', c.stick_how or '12', id)
+    -- Tanks always hold the front so the mob faces them; everyone else uses StickHow.
+    local how = (is_tank(st) and c.tank_stick) or c.stick_how or '12'
+    mq.cmdf('/stick %s id %d', how, id)
   end
 end
 

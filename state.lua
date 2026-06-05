@@ -38,6 +38,7 @@ function state.new(cfg)
     melee_on      = cfg:bool('Melee', 'MeleeOn', false),
     melee_dist    = cfg:num('Melee', 'MeleeDistance', 25),
     stick_how     = cfg:get('Melee', 'StickHow', '!frontangle 12'),
+    tank_stick    = cfg:get('Melee', 'TankStickHow', '!front'),  -- tanks always hold the front
     face_on       = cfg:bool('Melee', 'FaceMobOn', true),
     dps_on        = cfg:bool('DPS', 'DPSOn', false),
     dps_interval  = cfg:num('DPS', 'DPSInterval', 1),
