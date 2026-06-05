@@ -559,6 +559,9 @@ function buff.tick(st)
   if in_combat and not st.flags.buff_mode then return end
   if os.clock() < (st.buff.read_deadline or 0) then return end
 
+  dbg('tick RUN (CheckBuffsTimer=%s; was throttled until %.1f, now %.1f)',
+      tostring(st.buff.check_secs), st.buff.read_deadline or 0, os.clock())
+
   for _, en in ipairs(st.buff.entries) do
     -- per-iteration combat re-check (macro re-runs GetHostilesOnXTarget each pass).
     if (st.combat.aggro_target_id ~= nil or mq.TLO.Me.CombatState() == 'COMBAT')
