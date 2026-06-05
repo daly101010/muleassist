@@ -1,172 +1,115 @@
 -- muleassist/state.lua
 -- Runtime state built from config. Replaces the macro's ~300 outer-scope variables.
+-- apply_config (re-runnable) sets every config-derived field IN PLACE so /mareload and
+-- the embedded UI can re-apply edits without orphaning the loop/binds' st reference or
+-- wiping runtime (camp, pull/combat state machines, timers).
 local state = {}
 
-function state.new(cfg)
-  local st = { cfg = cfg, running = true }
-
+-- Re-runnable: (re)assign every config-derived field on st. Never touches runtime fields.
+function state.apply_config(st, cfg)
+  st.cfg  = cfg
   st.role = cfg:get('General', 'Role', 'Assist')
 
-  st.flags = {
-    pet_on    = cfg:bool('Pet',    'PetOn',        false),
-    buffs_on  = cfg:bool('Buffs',  'BuffsOn',      false),
-    heals_on  = cfg:bool('Heals',  'HealsOn',      false),
-    dps_on    = cfg:bool('DPS',    'DPSOn',        false),
-    melee_on  = cfg:bool('Melee',  'MeleeOn',      false),
-    mez_on    = cfg:bool('Mez',    'MezOn',        false),
-    charm_on  = cfg:bool('General','CharmOn',      false),
-    med_on    = cfg:bool('General','MedOn',        false),
-    return_to_camp = cfg:bool('General', 'ReturnToCamp', false),
-    eqbc_on   = cfg:bool('General','EQBCOn',       false),
-    dannet_on = cfg:bool('General','DanNetOn',     false),
-  }
+  st.flags = st.flags or {}
+  local f = st.flags
+  f.pet_on    = cfg:bool('Pet',     'PetOn',        false)
+  f.buffs_on  = cfg:bool('Buffs',   'BuffsOn',      false)
+  f.heals_on  = cfg:bool('Heals',   'HealsOn',      false)
+  f.dps_on    = cfg:bool('DPS',     'DPSOn',        false)
+  f.melee_on  = cfg:bool('Melee',   'MeleeOn',      false)
+  f.mez_on    = cfg:bool('Mez',     'MezOn',        false)
+  f.charm_on  = cfg:bool('General', 'CharmOn',      false)
+  f.med_on    = cfg:bool('General', 'MedOn',        false)
+  f.return_to_camp = cfg:bool('General', 'ReturnToCamp', false)
+  f.eqbc_on   = cfg:bool('General', 'EQBCOn',       false)
+  f.dannet_on = cfg:bool('General', 'DanNetOn',     false)
 
-  st.flags.buff_mode   = false
-  st.flags.zombie_mode = false
+  st.combat = st.combat or {}
+  local c = st.combat
+  c.role           = (cfg:get('General', 'Role', 'Assist') or 'Assist')
+  c.assist_at      = cfg:num('Melee', 'AssistAt', 95)
+  c.melee_on       = cfg:bool('Melee', 'MeleeOn', false)
+  c.melee_dist     = cfg:num('Melee', 'MeleeDistance', 25)
+  c.stick_how      = cfg:get('Melee', 'StickHow', '!frontangle 12')
+  c.tank_stick     = cfg:get('Melee', 'TankStickHow', '!front')
+  c.face_on        = cfg:bool('Melee', 'FaceMobOn', true)
+  c.dps_on         = cfg:bool('DPS', 'DPSOn', false)
+  c.dps_interval   = cfg:num('DPS', 'DPSInterval', 1)
+  c.dps_cond_on    = cfg:bool('General', 'ConditionsOn', true) and cfg:bool('DPS', 'DPSCOn', true)
+  c.assist_outside = cfg:bool('General', 'AssistOutside', false)
+  c.pet_assist_at  = cfg:num('Pet', 'PetAssistAt', 95)
+  c.pet_combat_on  = cfg:bool('Pet', 'PetCombatOn', false)
+  c.aggro_on       = cfg:bool('Aggro', 'AggroOn', false)
+  c.burn_all_named = cfg:bool('Burn', 'BurnAllNamed', false)
 
-  st.timers = {} -- name -> deadline; populated by modules at runtime
+  st.heal = st.heal or {}
+  local h = st.heal
+  h.mode         = cfg:num('Heals', 'HealsOn', 0)
+  h.xtar         = cfg:get('Heals', 'XTarHeal', nil)
+  h.group_pets   = cfg:bool('Heals', 'HealGroupPetsOn', false)
+  h.interrupt    = cfg:num('Heals', 'InterruptHeals', 100)
+  h.duration_mod = cfg:num('General', 'DurationMod', 1)
+  h.cond_on      = cfg:bool('General', 'ConditionsOn', true) and cfg:bool('Heals', 'HealsCOn', true)
 
-  -- Optional callbacks wired by later phases (nil = skip): oh_shit, custom_func,
-  -- write_debuffs, etc.
-  st.hooks = {}
-  -- Combat state (Phase 4a). Runtime fields (aggro_target_id, my_target_id, combat_start,
-  -- pulled, chasing) are read defensively by heal/buff/rez; combat.tick populates them.
-  st.combat = {
-    -- config
-    role          = (cfg:get('General', 'Role', 'Assist') or 'Assist'),
-    assist_at     = cfg:num('Melee', 'AssistAt', 95),
-    melee_on      = cfg:bool('Melee', 'MeleeOn', false),
-    melee_dist    = cfg:num('Melee', 'MeleeDistance', 25),
-    stick_how     = cfg:get('Melee', 'StickHow', '!frontangle 12'),
-    tank_stick    = cfg:get('Melee', 'TankStickHow', '!front'),  -- tanks always hold the front
-    face_on       = cfg:bool('Melee', 'FaceMobOn', true),
-    dps_on        = cfg:bool('DPS', 'DPSOn', false),
-    dps_interval  = cfg:num('DPS', 'DPSInterval', 1),
-    dps_cond_on   = cfg:bool('General', 'ConditionsOn', true) and cfg:bool('DPS', 'DPSCOn', true),
-    assist_outside= cfg:bool('General', 'AssistOutside', false),
-    pet_assist_at = cfg:num('Pet', 'PetAssistAt', 95),
-    pet_combat_on = cfg:bool('Pet', 'PetCombatOn', false),
-    aggro_on      = cfg:bool('Aggro', 'AggroOn', false),
-    burn_all_named= cfg:bool('Burn', 'BurnAllNamed', false),
-    -- runtime
-    aggro_target_id = nil,
-    hostile_count   = 0,
-    mob_count       = 0,
-    my_target_id    = nil,
-    my_target_name  = nil,
-    combat_start    = nil,
-    attacking       = nil,
-    pulled          = nil,
-    chasing         = nil,
-    xtslot          = 1,
-    dps_timers      = {},   -- [slot_index][target_id] = os.clock() deadline
-    entries         = {},   -- categorized DPS list (combat.setup)
-    debuffs         = {},   -- DPS entries with Arg2>=101 (combat.setup)
-    aggro           = {},   -- parsed Aggro list (combat.setup)
-    burn            = {},
-    burning         = false,
-    named_check     = nil,  -- runtime: already burned this named
-  }
+  st.rez = st.rez or {}
+  st.rez.auto     = cfg:num('Heals', 'AutoRezOn', 0)
+  st.rez.with     = cfg:get('Heals', 'AutoRezWith', nil)
+  st.rez.mount_on = cfg:bool('General', 'MountOn', true)
 
-  st.heal = {
-    mode         = cfg:num('Heals', 'HealsOn', 0),      -- 0 off,1 all,2 group-no-MA,3 MA+self
-    single       = {}, group = {},                       -- populated by heal.setup
-    timers       = {}, group_timers = {}, pet_timers = {},
-    single_point = 0,                                    -- max single heal %, computed in setup
-    xtar         = cfg:get('Heals', 'XTarHeal', nil),    -- pipe list of XTarget slot numbers
-    group_pets   = cfg:bool('Heals', 'HealGroupPetsOn', false),
-    interrupt    = cfg:num('Heals', 'InterruptHeals', 100),
-    duration_mod = cfg:num('General', 'DurationMod', 1),
-    cond_on      = cfg:bool('General', 'ConditionsOn', true) and cfg:bool('Heals', 'HealsCOn', true),
-  }
+  st.buff = st.buff or {}
+  local b = st.buff
+  b.check_secs    = cfg:num('Buffs', 'CheckBuffsTimer', 10)
+  b.while_chasing = cfg:bool('General', 'BuffWhileChasing', true)
+  b.duration_mod  = cfg:num('General', 'DurationMod', 1)
+  b.cond_on       = cfg:bool('General', 'ConditionsOn', true) and cfg:bool('Buffs', 'BuffsCOn', true)
 
-  st.rez = {
-    auto          = cfg:num('Heals', 'AutoRezOn', 0),     -- 0 off, 1 always(no-aggro), 2 after-combat
-    with          = cfg:get('Heals', 'AutoRezWith', nil), -- spell/AA/item name
-    radius        = 150,                                   -- macro RezRadius const
-    battle_timers = {},                                    -- [groupSlot] = os.clock() deadline
-    ooc_timers    = {},                                    -- [corpseSpawnID] = os.clock() deadline
-    mount_on      = cfg:bool('General', 'MountOn', true),  -- CastMount deferred to Phase 5
-  }
+  st.pet = st.pet or {}
+  st.pet.buffs_on     = cfg:bool('Pet', 'PetBuffsOn', false)
+  st.pet.shrink_on    = cfg:bool('Pet', 'PetShrinkOn', false)
+  st.pet.shrink_spell = cfg:get('Pet', 'PetShrinkSpell', 'Tiny Companion')
+  st.pet.check_secs   = 60
 
-  st.buff = {
-    check_secs    = cfg:num('Buffs', 'CheckBuffsTimer', 10),  -- ReadBuffsTimer throttle
-    while_chasing = cfg:bool('General', 'BuffWhileChasing', true),
-    duration_mod  = cfg:num('General', 'DurationMod', 1),
-    cond_on       = cfg:bool('General', 'ConditionsOn', true)
-                    and cfg:bool('Buffs', 'BuffsCOn', true),
-    entries       = {},   -- categorized by buff.setup
-    timers        = {},   -- [entry_index][who] = os.clock() deadline (who: member idx, 7=MA, 0=self)
-    oog_timers    = {},   -- [spawnID] = os.clock() deadline (OOG dedup; replaces the ini)
-    read_deadline = 0,    -- os.clock() deadline for the whole-loop throttle
-  }
+  -- cfg MainAssist wins, but keep an arg/auto-derived value if cfg is empty
+  st.main_assist = cfg:get('General', 'MainAssist', nil) or st.main_assist
 
-  st.pet = {
-    buffs_on       = cfg:bool('Pet', 'PetBuffsOn',  false),
-    shrink_on      = cfg:bool('Pet', 'PetShrinkOn', false),
-    shrink_spell   = cfg:get('Pet', 'PetShrinkSpell', 'Tiny Companion'),
-    check_secs     = 60,   -- PetBuffCheck throttle
-    check_deadline = 0,
-    entries        = {},   -- set by petbuff.setup
-  }
+  st.camp = st.camp or {}
+  st.camp.radius = cfg:num('General', 'CampRadius', 60)
+  st.camp.exceed = cfg:num('General', 'CampRadiusExceed', 400)
 
-  st.main_assist    = cfg:get('General', 'MainAssist', nil)
-  st.main_assist_id = 0
+  st.move = st.move or {}
+  local m = st.move
+  m.return_to_camp  = cfg:bool('General', 'ReturnToCamp', false)
+  m.return_accuracy = cfg:num('General', 'ReturnToCampAccuracy', 10)
+  m.chase_assist    = cfg:bool('General', 'ChaseAssist', false)
+  m.chase_distance  = cfg:num('General', 'ChaseDistance', 25)
 
-  st.camp = {
-    x = nil, y = nil, z = nil,
-    radius = cfg:num('General', 'CampRadius',       60),
-    exceed = cfg:num('General', 'CampRadiusExceed', 400),
-  }
+  st.med = st.med or {}
+  st.med.on         = cfg:bool('General', 'MedOn', false)
+  st.med.start      = cfg:num('General', 'MedStart', 90)
+  st.med.sit_to_med = cfg:bool('General', 'SitToMed', false)
 
-  st.move = {
-    return_to_camp = cfg:bool('General', 'ReturnToCamp', false),
-    return_accuracy= cfg:num('General', 'ReturnToCampAccuracy', 10),
-    chase_assist   = cfg:bool('General', 'ChaseAssist', false),
-    chase_distance = cfg:num('General', 'ChaseDistance', 25),
-    chase_name     = nil,   -- defaults to MA at setup; a bind can change it later
-  }
-
-  st.pull = {
-    with        = cfg:get('Pull', 'PullWith', 'Melee'),
-    max_radius  = cfg:num('Pull', 'MaxRadius', 350),
-    max_z       = cfg:num('Pull', 'MaxZRange', 50),
-    wait        = cfg:num('Pull', 'PullWait', 5),
-    cond        = cfg:get('Pull', 'PullCond', nil),
-    mobs        = cfg:get('Pull', 'MobsToPull', 'All'),
-    namedsfirst = cfg:bool('Pull', 'PullNamedsFirst', false),
-    level_raw   = cfg:get('Pull', 'PullLevel', '0|0'),
-    melee_dist  = cfg:num('Melee', 'MeleeDistance', 25),
-    -- 5b-2 features
-    chain       = cfg:num('Pull', 'ChainPull', 0),
-    chain_hp    = cfg:num('Pull', 'ChainPullHP', 90),
-    chain_pause = cfg:get('Pull', 'ChainPullPause', '0'),     -- "activeMin|pauseMin" or "0"
-    use_calm    = cfg:bool('Pull', 'UseCalm', false),
-    calm_with   = cfg:get('Pull', 'CalmWith', 'Harmony'),
-    calm_radius = cfg:num('Pull', 'CalmRadius', 50),
-    arc_width   = cfg:num('Pull', 'PullArcWidth', 0),
-    grab_dead   = cfg:bool('Pull', 'GrabDeadGroupMembers', false),
-    mobs_sec    = cfg:get('Pull', 'MobsToPullSecondary', nil),
-    -- resolved by pull.setup
-    range = 15, range_type = 'Melee', pull_min = 1, pull_max = 200,
-    mob_list = nil, mob_list_sec = nil,
-    arc_lside = 0, arc_rside = 0,
-    move_use = 'nav', path_wp_count = 0,
-    -- runtime
-    state = 'idle', target_id = nil, abort_deadline = 0, wait_until = 0, attempts = 0,
-    chain_hold = false, chain_active_until = 0, chain_pause_until = 0,
-    dragging = 0,
-  }
-  -- Puller travels out to MaxRadius; don't let the camp leash abort it (macro @5583).
-  if st.pull.max_radius + 1 > st.camp.exceed then st.camp.exceed = st.pull.max_radius + 1 end
-
-  st.med = {
-    on         = cfg:bool('General', 'MedOn', false),  -- meditate when idle/out of combat
-    start      = cfg:num('General', 'MedStart', 90),   -- sit when a med stat drops below this %
-    sit_to_med = cfg:bool('General', 'SitToMed', false), -- also sit between casts IN combat
-                                                         -- (non-melee chars only: healers/casters)
-    medding    = false,                                 -- runtime: currently sitting to recover
-  }
+  st.pull = st.pull or {}
+  local pl = st.pull
+  pl.with        = cfg:get('Pull', 'PullWith', 'Melee')
+  pl.max_radius  = cfg:num('Pull', 'MaxRadius', 350)
+  pl.max_z       = cfg:num('Pull', 'MaxZRange', 50)
+  pl.wait        = cfg:num('Pull', 'PullWait', 5)
+  pl.cond        = cfg:get('Pull', 'PullCond', nil)
+  pl.mobs        = cfg:get('Pull', 'MobsToPull', 'All')
+  pl.namedsfirst = cfg:bool('Pull', 'PullNamedsFirst', false)
+  pl.level_raw   = cfg:get('Pull', 'PullLevel', '0|0')
+  pl.melee_dist  = cfg:num('Melee', 'MeleeDistance', 25)
+  pl.chain       = cfg:num('Pull', 'ChainPull', 0)
+  pl.chain_hp    = cfg:num('Pull', 'ChainPullHP', 90)
+  pl.chain_pause = cfg:get('Pull', 'ChainPullPause', '0')
+  pl.use_calm    = cfg:bool('Pull', 'UseCalm', false)
+  pl.calm_with   = cfg:get('Pull', 'CalmWith', 'Harmony')
+  pl.calm_radius = cfg:num('Pull', 'CalmRadius', 50)
+  pl.arc_width   = cfg:num('Pull', 'PullArcWidth', 0)
+  pl.grab_dead   = cfg:bool('Pull', 'GrabDeadGroupMembers', false)
+  pl.mobs_sec    = cfg:get('Pull', 'MobsToPullSecondary', nil)
+  -- camp leash must cover the pull radius (re-applied here so a live radius edit sticks)
+  if pl.max_radius + 1 > st.camp.exceed then st.camp.exceed = pl.max_radius + 1 end
 
   st.lists = {
     dps       = cfg:list('dps'),
@@ -181,6 +124,50 @@ function state.new(cfg)
     ae        = cfg:list('ae'),
     cures     = cfg:list('cures'),
   }
+end
+
+function state.new(cfg)
+  local st = { running = true, hooks = {}, timers = {} }
+  state.apply_config(st, cfg)
+
+  -- runtime-only fields (set once; survive every apply_config/reapply)
+  st.flags.buff_mode   = false
+  st.flags.zombie_mode = false
+
+  local c = st.combat
+  c.aggro_target_id = nil; c.hostile_count = 0; c.mob_count = 0
+  c.my_target_id = nil; c.my_target_name = nil; c.combat_start = nil
+  c.attacking = nil; c.pulled = nil; c.chasing = nil; c.xtslot = 1
+  c.dps_timers = {}; c.entries = {}; c.debuffs = {}; c.aggro = {}
+  c.burn = {}; c.burning = false; c.named_check = nil
+
+  local h = st.heal
+  h.single = {}; h.group = {}
+  h.timers = {}; h.group_timers = {}; h.pet_timers = {}
+  h.single_point = 0
+
+  st.rez.radius = 150; st.rez.battle_timers = {}; st.rez.ooc_timers = {}
+
+  st.buff.entries = {}; st.buff.timers = {}; st.buff.oog_timers = {}; st.buff.read_deadline = 0
+
+  st.pet.check_deadline = 0; st.pet.entries = {}
+
+  st.main_assist_id = 0
+
+  st.camp.x = nil; st.camp.y = nil; st.camp.z = nil
+
+  st.move.chase_name = nil
+
+  st.med.medding = false
+
+  local pl = st.pull
+  pl.range = 15; pl.range_type = 'Melee'; pl.pull_min = 1; pl.pull_max = 200
+  pl.mob_list = nil; pl.mob_list_sec = nil
+  pl.arc_lside = 0; pl.arc_rside = 0; pl.move_use = 'nav'; pl.path_wp_count = 0
+  pl.state = 'idle'; pl.target_id = nil; pl.abort_deadline = 0; pl.wait_until = 0; pl.attempts = 0
+  pl.chain_hold = false; pl.chain_active_until = 0; pl.chain_pause_until = 0; pl.dragging = 0
+
+  st.pending_reapply = false   -- set by /mareload or the UI; consumed in init.lua's loop
 
   return st
 end

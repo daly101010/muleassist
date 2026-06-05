@@ -60,6 +60,18 @@ function t.run()
   assert(st.pull.move_use == 'nav', 'pull move_use defaults nav')
   assert(st.pull.dragging == 0, 'pull dragging starts 0')
 
+  -- apply_config is re-runnable: picks up edits, preserves runtime fields
+  st.camp.x = 111
+  st.pull.state = 'outbound'
+  st.combat.aggro_target_id = 999
+  cfg.sections['Melee'] = cfg.sections['Melee'] or {}
+  cfg.sections['Melee']['AssistAt'] = '77'
+  state.apply_config(st, cfg)
+  assert(st.combat.assist_at == 77, 'apply_config picks up edited AssistAt')
+  assert(st.camp.x == 111, 'apply_config preserves camp.x (runtime)')
+  assert(st.pull.state == 'outbound', 'apply_config preserves pull.state (runtime)')
+  assert(st.combat.aggro_target_id == 999, 'apply_config preserves combat runtime')
+
   print('test_state: PASS')
   return true
 end
