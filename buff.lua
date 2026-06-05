@@ -37,9 +37,16 @@ local function vt(v) return tostring(v) .. '(' .. type(v) .. ')' end
 -- peer to evaluate the decision against ITS OWN complete buff list (idiom from MQ2DanNet
 -- helpers: /dquery then read DanNet[peer].Q[query] once .Received() > 0).
 ----------------------------------------------------------------------
+-- Is `name` a connected DanNet peer? Peers() is a '|'-delimited, lowercased list (the
+-- existence idiom rgmercs uses); DanNet(peer)() alone returns nil even for valid peers.
+local function dnet_is_peer(name)
+  if not name or name == '' then return false end
+  return ((mq.TLO.DanNet.Peers() or '') .. '|'):lower():find(name:lower() .. '|', 1, true) ~= nil
+end
+
 -- Returns (value, received). received=false means not a peer / no answer -> caller falls back.
 local function dnet_raw(peer, query, timeout)
-  if not peer or peer == '' or not mq.TLO.DanNet(peer)() then return nil, false end
+  if not dnet_is_peer(peer) then return nil, false end
   mq.cmdf('/dquery %s -q "%s"', peer, query)
   mq.delay(25)
   mq.delay(timeout or 1000, function() return (mq.TLO.DanNet(peer).Q(query).Received() or 0) > 0 end)
@@ -52,7 +59,8 @@ end
 --   'cast'  -> missing/expiring AND it will stack
 --   nil     -> not a DanNet peer / no answer -> caller uses local checks
 local function peer_buff_decision(st, peer, spell)
-  if not st.flags.dannet_on then return nil end
+  if not st.flags.dannet_on then dbg('dnet off'); return nil end
+  if not dnet_is_peer(peer) then dbg('dnet: %q not a peer (peers=%s)', peer, tostring(mq.TLO.DanNet.Peers())); return nil end
   local dur, ok = dnet_raw(peer, 'Me.Buff[' .. spell .. '].Duration.TotalSeconds', 1000)
   if not ok then return nil end
   if dur and tonumber(dur) and tonumber(dur) > 30 then return 'skip' end  -- still buffed
