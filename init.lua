@@ -13,6 +13,7 @@ local combat = require('muleassist.combat')
 local med    = require('muleassist.med')
 local move   = require('muleassist.move')
 local pull   = require('muleassist.pull')
+local settings = require('muleassist.settings')
 
 local function find_config_path(server, char)
   local cfgdir = mq.TLO.MacroQuest.Path('config')() or '.'
@@ -65,9 +66,14 @@ local function main(...)
   mq.bind('/maburn', function() st.combat.burning = true end)
   mq.bind('/macamp', function() move.set_camp(st) end)
   mq.bind('/macamphere', function() st.move.return_to_camp = true; move.set_camp(st) end)
+  mq.bind('/mareload', function() st.pending_reapply = true end)
 
   while st.running do
     mq.doevents()
+    if st.pending_reapply then
+      st.pending_reapply = false
+      settings.reapply(st)
+    end
     -- Default MainAssist to the game's group main assist if it wasn't configured/passed.
     if not st.main_assist or st.main_assist == '' then
       local gma = mq.TLO.Group.MainAssist.CleanName()
