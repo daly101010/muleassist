@@ -29,6 +29,11 @@ function t.run()
   assert(type(st.rez.battle_timers) == 'table', 'battle_timers missing')
   assert(type(st.rez.ooc_timers) == 'table', 'ooc_timers missing')
 
+  assert(type(st.buff) == 'table', 'st.buff missing')
+  assert(st.buff.check_secs == 10, 'default CheckBuffsTimer should be 10')
+  assert(type(st.buff.entries) == 'table' and type(st.buff.timers) == 'table',
+    'st.buff.entries/timers should be tables')
+
   print('test_state: PASS')
   return true
 end

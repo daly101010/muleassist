@@ -54,6 +54,17 @@ function state.new(cfg)
     mount_on      = cfg:bool('General', 'MountOn', true),  -- CastMount deferred to Phase 5
   }
 
+  st.buff = {
+    check_secs    = cfg:num('Buffs', 'CheckBuffsTimer', 10),  -- ReadBuffsTimer throttle
+    while_chasing = cfg:bool('General', 'BuffWhileChasing', true),
+    duration_mod  = cfg:num('General', 'DurationMod', 1),
+    cond_on       = cfg:bool('General', 'ConditionsOn', true)
+                    and cfg:bool('Buffs', 'BuffsCOn', true),
+    entries       = {},   -- categorized by buff.setup
+    timers        = {},   -- [entry_index][who] = os.clock() deadline (who: member idx, 7=MA, 0=self)
+    read_deadline = 0,    -- os.clock() deadline for the whole-loop throttle
+  }
+
   st.main_assist    = cfg:get('General', 'MainAssist', nil)
   st.main_assist_id = 0
 

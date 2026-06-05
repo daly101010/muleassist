@@ -7,6 +7,7 @@ local state  = require('muleassist.state')
 local cast   = require('muleassist.cast')
 local heal   = require('muleassist.heal')
 local rez    = require('muleassist.rez')
+local buff   = require('muleassist.buff')
 
 local function find_config_path(server, char)
   local cfgdir = mq.TLO.MacroQuest.Path('config')() or '.'
@@ -43,6 +44,7 @@ local function main(...)
     cast.remem_misc_gem_lw = mq.TLO.Me.Gem(cast.misc_gem_lw).Name()
   end
   heal.setup(st)
+  buff.setup(st)
 
   Write.Info('MuleAssist-Lua loaded. Role=%s MA=%s AssistAt=%d',
     st.role, tostring(st.main_assist), cfg:num('Melee', 'AssistAt', 95))
@@ -58,6 +60,9 @@ local function main(...)
     -- (Sub Main @1561), independent of HealsOn, gated internally on AutoRezOn.
     heal.tick(st)
     if st.rez.auto ~= 0 then rez.check(st) end
+    -- CheckBuffs is gated only on BuffsOn at the macro call site (@1576); its internal
+    -- combat gate (aggro + BuffMode) decides whether to act, so call unconditionally.
+    buff.tick(st)
     mq.delay(250)
   end
 
