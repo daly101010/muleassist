@@ -31,6 +31,16 @@ end
 -- Show a TLO result's value AND lua type, e.g. "FALSE(string)" or "true(boolean)".
 local function vt(v) return tostring(v) .. '(' .. type(v) .. ')' end
 
+-- Is this buff castable RIGHT NOW (off cooldown)? If not, the buff loop should skip it this
+-- pass rather than entering cast.cast and waiting for the gem/AA to refresh. Un-memmed spells
+-- pass (Phase 2c will mem them); a memmed spell must be gem-ready; AAs/items use their timers.
+local function buff_ready(name, bufftype)
+  if bufftype == 'aa'   then return mqbool(mq.TLO.Me.AltAbilityReady(name)()) end
+  if bufftype == 'item' then return mqbool(mq.TLO.Me.ItemReady('=' .. name)()) end
+  if mq.TLO.Me.Gem(name)() then return mqbool(mq.TLO.Me.SpellReady(name)()) end
+  return true
+end
+
 ----------------------------------------------------------------------
 -- DanNet peer queries. Targeting only exposes a PARTIAL buff list for other PCs, so local
 -- StacksSpawn/StacksTarget are blind to a group member's blocking buffs. Instead ask the
@@ -157,6 +167,10 @@ end
 function buff.check_group(st, en, spell_to_cast, buff_sub, spell_range)
   local sb = silver(buff_sub)
   local me_id = mq.TLO.Me.ID()
+  -- Don't enter the cast path for a buff that's on cooldown -- skip it this pass.
+  if not buff_ready(spell_to_cast, en.bufftype) then
+    dbg('%s not ready (cooldown/AA) -> skip entry', spell_to_cast); return true
+  end
   local list = {}
 
   local gn = group_size()
@@ -174,7 +188,7 @@ function buff.check_group(st, en, spell_to_cast, buff_sub, spell_range)
       if (not ready(st, en.index, j))
          and (mq.TLO.Spawn(id).CachedBuff(sb).Duration.TotalSeconds() or 0) > 30 then dbg('p1 %s/%s skip: timer+cached>30', sb, nm); break end
       if st.buff.cond_on and en.cond and en.cond ~= '' and not cond.eval(en.cond) then dbg('p1 %s/%s skip: cond false', sb, nm); break end
-      if en.tag == 'Me' and id ~= me_id then break end
+      if en.tag == 'Me' and id ~= me_id then dbg('p1 %s/%s skip: Me-tag, not self (id=%s me=%s)', sb, nm, tostring(id), tostring(me_id)); break end
       local short = gm.Class.ShortName() or ''
       if not class_ok(en, short) then dbg('p1 %s/%s skip: class/archetype', sb, nm); break end
       if (mq.TLO.Me.CurrentMana() or 0) < (mq.TLO.Spell(spell_to_cast).Mana() or 0) then dbg('p1 %s/%s skip: low mana', sb, nm); break end
@@ -259,6 +273,7 @@ function buff.check_ma(st, en, spell_range)
   local mat_id = st.main_assist_id
   if not ma or not mat_id or mat_id == 0 then return end
   if (mq.TLO.Spawn('=' .. ma).Distance() or 9999) > spell_range then return end
+  if not buff_ready(en.check_name, en.bufftype) then return end
   local sb = silver(en.check_name)
   if st.buff.cond_on and en.cond and en.cond ~= '' and not cond.eval(en.cond) then return end
   -- Authoritative stacking via the MA's own buff list when it's a DanNet peer.
@@ -286,6 +301,7 @@ end
 ----------------------------------------------------------------------
 function buff.check_self(st, en)
   local sb = silver(en.check_name)
+  if not buff_ready(en.check_name, en.bufftype) then dbg('self %s not ready -> skip', sb); return end
   if mq.TLO.Me.Buff(sb).ID() or mq.TLO.Me.Song(sb).ID() then dbg('self %s skip: already on me', sb); return end
   local raw = mq.TLO.Spell(sb).Stacks()
   dbg('self %s Stacks=%s -> %s', sb, vt(raw), tostring(mqbool(raw)))
