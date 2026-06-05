@@ -216,7 +216,10 @@ local function can_start_combat(st)
   local sp = mq.TLO.Spawn(id)
   local ty = sp.Type()
   if ty ~= 'NPC' and ty ~= 'PET' then return false end
-  if (sp.PctHPs() or 100) > c.assist_at then return false end
+  -- Tanks initiate, so they engage at full HP (macro forces AssistAt=100 for tank roles);
+  -- assists wait until the MA brings the mob to AssistAt%.
+  local at = is_tank(st) and 100 or c.assist_at
+  if (sp.PctHPs() or 100) > at then return false end
   local dist = sp.Distance() or 9999
   if dist < c.melee_dist then return true end
   -- Camp-distance gate: anchor on SELF when tanking (we are the camp center), else on the MA.
