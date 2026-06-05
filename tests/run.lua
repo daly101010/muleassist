@@ -8,6 +8,7 @@ local mods = {
   'muleassist.tests.test_heal',
   'muleassist.tests.test_cast_mem',
   'muleassist.tests.test_buff',
+  'muleassist.tests.test_petbuff',
 }
 
 local ok_all = true

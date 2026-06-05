@@ -62,7 +62,17 @@ function state.new(cfg)
                     and cfg:bool('Buffs', 'BuffsCOn', true),
     entries       = {},   -- categorized by buff.setup
     timers        = {},   -- [entry_index][who] = os.clock() deadline (who: member idx, 7=MA, 0=self)
+    oog_timers    = {},   -- [spawnID] = os.clock() deadline (OOG dedup; replaces the ini)
     read_deadline = 0,    -- os.clock() deadline for the whole-loop throttle
+  }
+
+  st.pet = {
+    buffs_on       = cfg:bool('Pet', 'PetBuffsOn',  false),
+    shrink_on      = cfg:bool('Pet', 'PetShrinkOn', false),
+    shrink_spell   = cfg:get('Pet', 'PetShrinkSpell', 'Tiny Companion'),
+    check_secs     = 60,   -- PetBuffCheck throttle
+    check_deadline = 0,
+    entries        = {},   -- set by petbuff.setup
   }
 
   st.main_assist    = cfg:get('General', 'MainAssist', nil)

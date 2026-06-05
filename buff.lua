@@ -8,9 +8,6 @@ local cast  = require('muleassist.cast')
 local cond  = require('muleassist.cond')
 local buff  = {}
 
--- Tags handled by other subsystems (skip in the normal buff path) -- Phase 3b.
-local SKIP_TAGS = { Aura=true, End=true, Mount=true, Mana=true, Managroup=true,
-                    Endgroup=true, Summon=true, Once=true, Remove=true, NoGroup=true }
 local CASTER = { CLR=1,DRU=1,SHM=1,BST=1,ENC=1,MAG=1,NEC=1,PAL=1,SHD=1,RNG=1,WIZ=1 }
 local MELEE  = { BRD=1,BER=1,BST=1,MNK=1,PAL=1,ROG=1,RNG=1,SHD=1,WAR=1 }
 
@@ -60,8 +57,41 @@ function buff.setup(st)
     local part5    = e.args[5] or ''
     if raw_name ~= '' and raw_name:lower() ~= 'null' then
       local cast_name  = raw_name:gsub('^item:', ''):gsub('^summoned:', '')
+
+      -- Dual + 4thPart subtype rewrite (CheckBuffs @6744-6758); class -> list in part5.
+      if tag == 'Dual' then
+        if     part4 == 'MA'     then tag = 'DualMA'
+        elseif part4 == 'melee'  then tag = 'DualMelee'
+        elseif part4 == 'caster' then tag = 'DualCaster'
+        elseif part4 == 'class'  then tag = 'DualClass'
+        elseif part4 == 'mgb'    then tag = 'DualMgb' end
+      elseif tag == 'class' then
+        part5 = part3
+      end
+
       local is_dual    = tag:find('Dual') ~= nil
       local check_name = (is_dual and part3 ~= '') and part3 or cast_name
+
+      -- archetype/class filter, derived from tag (incl. Dual variants).
+      local archetype, class_list
+      local tl = tag:lower()
+      if tl:find('caster') then archetype = 'caster'
+      elseif tl:find('melee') then archetype = 'melee'
+      elseif tl == 'class' or tl == 'dualclass' then archetype = 'class'; class_list = part5 end
+
+      -- OOG suffix: everything after the first ':' is a comma list of tokens
+      -- (PC name / xtargetN / raid / fellowship / rangeN). Pipe fields are unaffected.
+      local oog
+      local colon = e.raw:find(':', 1, true)
+      if colon then
+        oog = {}
+        for tok in (e.raw:sub(colon + 1) .. ','):gmatch('([^,]*),') do
+          tok = tok:gsub('^%s+', ''):gsub('%s+$', '')
+          if tok ~= '' then oog[#oog + 1] = tok end
+        end
+        if #oog == 0 then oog = nil end
+      end
+
       out[#out + 1] = {
         index      = e.index,
         cast_name  = cast_name,
@@ -70,7 +100,10 @@ function buff.setup(st)
         part3 = part3, part4 = part4, part5 = part5,
         cond       = e.cond,
         is_dual    = is_dual,
-        mgb        = tag:lower():find('mgb') ~= nil,
+        mgb        = tl:find('mgb') ~= nil,
+        archetype  = archetype,
+        class_list = class_list,
+        oog        = oog,
       }
     end
   end
@@ -98,9 +131,13 @@ end
 -- coerce; tonumber("FALSE") -> nil -> 0.
 local function group_size() return tonumber(mq.TLO.Group()) or 0 end
 
-local function archetype_ok(tag, short)
-  if tag == 'caster' then return CASTER[short] ~= nil end
-  if tag == 'Melee'  then return MELEE[short]  ~= nil end
+-- Class/archetype gate from an entry's derived archetype + class_list.
+local function class_ok(en, short)
+  if en.archetype == 'caster' then return CASTER[short] ~= nil end
+  if en.archetype == 'melee'  then return MELEE[short]  ~= nil end
+  if en.archetype == 'class' then
+    return (',' .. (en.class_list or '') .. ','):find(',' .. short .. ',', 1, true) ~= nil
+  end
   return true
 end
 
@@ -129,9 +166,7 @@ function buff.check_group(st, en, spell_to_cast, buff_sub, spell_range)
       if st.buff.cond_on and en.cond and en.cond ~= '' and not cond.eval(en.cond) then break end
       if en.tag == 'Me' and id ~= me_id then break end
       local short = gm.Class.ShortName() or ''
-      if (en.tag == 'class' or en.tag == 'dualclass')
-         and not (',' .. (en.part5 or '') .. ','):find(',' .. short .. ',', 1, true) then break end
-      if not archetype_ok(en.tag, short) then break end
+      if not class_ok(en, short) then break end
       if (mq.TLO.Me.CurrentMana() or 0) < (mq.TLO.Spell(spell_to_cast).Mana() or 0) then break end
       if en.tag == '!MA' and id == st.main_assist_id then break end
       if en.tag == '!ME' and id == me_id then break end
@@ -221,6 +256,265 @@ function buff.check_self(st, en)
 end
 
 ----------------------------------------------------------------------
+-- Regen (Sub RegenOther @8280) + mana/endurance loop (Sub CastMana @17335).
+----------------------------------------------------------------------
+local REGEN_END  = { BER=1,BST=1,MNK=1,PAL=1,RNG=1,ROG=1,SHD=1,WAR=1 }
+local REGEN_MANA = { BRD=1,BST=1,CLR=1,DRU=1,ENC=1,MAG=1,NEC=1,PAL=1,RNG=1,SHD=1,SHM=1,WIZ=1 }
+
+-- stat: 'Mana' | 'Endurance'. classes: comma list or nil (-> default by stat).
+function buff.regen_other(st, name, stat, pct, classes)
+  if mq.TLO.Me.Invis() or mq.TLO.Me.Hovering() then return end
+  if st.combat.aggro_target_id ~= nil or mq.TLO.Me.CombatState() == 'COMBAT' then return end
+  local set
+  if classes and classes ~= '' and classes ~= '0' and classes:lower() ~= 'null' then
+    set = {}; for c in (classes .. ','):gmatch('([^,]*),') do if c ~= '' then set[c] = 1 end end
+  else
+    set = (stat == 'Endurance') and REGEN_END or REGEN_MANA
+  end
+  for i = 1, 5 do
+    local gm = mq.TLO.Group.Member(i)
+    local id, short = gm.ID(), gm.Class.ShortName() or ''
+    if id and set[short] then
+      local skip = (name:find('Rallying Call', 1, true) and id == st.main_assist_id)
+        or (name:find('Dichotomic Psalm', 1, true) and (mq.TLO.Me.CurrentEndurance() or 0) < 6700)
+        or ((gm.Class.Name() or ''):lower() == 'bard'
+            and (name == 'Dichotomic Psalm' or name == 'Quiet Miracle'))
+      if not skip then
+        local cur = (stat == 'Endurance') and (gm.PctEndurance() or 100) or (gm.PctMana() or 100)
+        if cur <= pct and cur >= 1 then
+          if cast.cast(name, 'Regenother', id) == 'CAST_SUCCESS' then
+            Write.Info('Casting %s on %s for %s', name, gm.CleanName() or ('m' .. i), stat)
+            return
+          end
+        end
+      end
+    end
+  end
+end
+
+-- Sub CastMana @17335: self mana-regen (Mana) + group regen (Managroup/Endgroup). Own slot.
+function buff.run_mana(st)
+  if mq.TLO.Me.Invis() then return end
+  for _, en in ipairs(st.buff.entries) do
+    local cond_ok = not (st.buff.cond_on and en.cond and en.cond ~= '' and not cond.eval(en.cond))
+    if cond_ok then
+      if en.tag == 'Mana' then
+        if not mq.TLO.Me.Buff('Revival Sickness').ID() then
+          local dich_skip = (en.cast_name == 'Dichotomic Psalm')
+            and ((mq.TLO.Me.Class.ShortName() == 'BRD') or (mq.TLO.Me.CurrentEndurance() or 0) < 6600)
+          if not dich_skip then
+            local mana_floor = tonumber(en.part3) or 0
+            local hp_floor   = tonumber(en.part4) or 0
+            if (mq.TLO.Me.PctMana() or 100) <= mana_floor and (mq.TLO.Me.PctHPs() or 0) > hp_floor then
+              if cast.cast(en.cast_name, 'Buffs', mq.TLO.Me.ID()) == 'CAST_SUCCESS' then
+                Write.Info('Casting %s for mana', en.cast_name)
+              end
+            end
+          end
+        end
+      elseif en.tag == 'Managroup' then
+        buff.regen_other(st, en.cast_name, 'Mana', tonumber(en.part3) or 0, en.part5)
+      elseif en.tag == 'Endgroup' then
+        buff.regen_other(st, en.cast_name, 'Endurance', tonumber(en.part3) or 0, en.part5)
+      end
+    end
+  end
+end
+
+----------------------------------------------------------------------
+-- End / Summon / Once dispatch (CheckEndurance @8078, SummonStuff @8103, BuffOnce @7957).
+----------------------------------------------------------------------
+function buff.check_endurance(st, en)
+  if mq.TLO.Me.Invis() or mq.TLO.Me.Hovering() then return end
+  local epct    = tonumber(en.part3) or 0
+  local ehealth = tonumber(en.part4) or 0
+  if (mq.TLO.Me.PctEndurance() or 100) > epct then return end
+  if (mq.TLO.Me.PctHPs() or 0) <= ehealth then return end
+  if cast.cast(en.cast_name, 'CheckEndurance', mq.TLO.Me.ID()) == 'CAST_SUCCESS' then
+    Write.Info('Casting %s for endurance', en.cast_name)
+  end
+end
+
+function buff.summon_stuff(st, en)
+  if mq.TLO.Me.Invis() or mq.TLO.Me.Hovering() then return end
+  local item = en.part3
+  local want = tonumber(en.part4) or 0
+  if not item or item == '' then return end
+  if (mq.TLO.FindItemCount('=' .. item)() or 0) >= want then return end
+  if (mq.TLO.Me.FreeInventory() or 0) == 0 then
+    Write.Warn('No inventory room to summon %s', item); return
+  end
+  if cast.cast(en.cast_name, 'SummonStuff-nomem', mq.TLO.Me.ID()) == 'CAST_SUCCESS' then
+    mq.delay(15000, function() return mq.TLO.Cursor.ID() ~= nil end)
+    if mq.TLO.Cursor.ID() then mq.cmd('/autoinventory') end
+    Write.Info('Summoned %s (%d/%d)', item, mq.TLO.FindItemCount('=' .. item)() or 0, want)
+  end
+end
+
+function buff.buff_once(st, en)
+  if mq.TLO.Me.Invis() or mq.TLO.Me.Hovering() then return end
+  if not mq.TLO.Spell(en.cast_name).Stacks() then return end
+  if not ready(st, en.index, 0) then return end
+  if cast.cast(en.cast_name, 'CheckEndurance', mq.TLO.Me.ID()) == 'CAST_SUCCESS' then
+    arm(st, en.index, 0, en.cast_name)
+  end
+end
+
+----------------------------------------------------------------------
+-- Auras (Sub CheckAura @7974).
+----------------------------------------------------------------------
+local function aura_name(spell)
+  local n = spell:gsub('%s*Rk%.%s*I+%s*$', '')
+  if spell:find("Disciple's Aura", 1, true) then n = 'Disciples Aura' end
+  local cls = (mq.TLO.Me.Class.Name() or ''):lower()
+  if cls == 'cleric' and spell:find('Reverent', 1, true) then n = 'Reverent Aura' end
+  if spell:find('Mana Reverberation', 1, true) then n = 'Mana Rev.'
+  elseif spell:find('Mana Repercussion', 1, true) or spell:find('Mana Reiteration', 1, true) then n = 'Mana Recursion Aura'
+  elseif spell:find('Mana Reiterate', 1, true) then n = 'Mana Reiterate Aura'
+  elseif spell:find('Mana Resurgence', 1, true) then n = 'Mana Resurgence Aura'
+  elseif spell:find('Runic Radiance Aura', 1, true) then n = 'Runic Rad. Aura' end
+  return n
+end
+
+local function aura_present(name)
+  local a1 = mq.TLO.Me.Aura(1).Name() or ''
+  local a2 = mq.TLO.Me.Aura(2).Name() or ''
+  return a1:find(name, 1, true) ~= nil or a2:find(name, 1, true) ~= nil
+end
+
+function buff.check_aura(st, spell)
+  if mq.TLO.Me.Invis() or mq.TLO.Me.Hovering() then return end
+  local short = mq.TLO.Me.Class.ShortName() or ''
+  local name  = aura_name(spell)
+  if short == 'MAG' and (spell:find('Arcane Distillect', 1, true) or spell:find('Earthen Strength', 1, true)
+       or spell:find("Rathe's Strength", 1, true)) then
+    if mq.TLO.Me.Pet.ID() and (mq.TLO.Me.Pet.Distance() or 999) < 175 and aura_present(name) then return end
+  elseif aura_present(name) then
+    return
+  end
+  if short == 'BRD' and mq.TLO.Me.Book(spell)() then
+    mq.cmd('/stopcast'); mq.cmd('/stoptwist')
+    mq.delay(5000, function() return not mq.TLO.Me.BardSongPlaying() end)
+    if not mq.TLO.Me.Gem(spell)() then
+      if mq.TLO.Cursor.ID() then mq.cmd('/autoinventory') end
+      cast.mem_spell(spell, cast.misc_gem, 0, 'CheckAura')
+      mq.delay(15000, function() return mq.TLO.Me.SpellReady(spell)() end)
+    end
+    mq.cmdf('/cast "%s"', spell)
+    cast.wait_cast('CheckAura', mq.TLO.Spell(spell).MyCastTime() or 0, spell)
+    Write.Info('Cast aura %s', spell); return
+  end
+  if (short == 'BER' or short == 'MNK' or short == 'ROG' or short == 'WAR')
+     and (mq.TLO.Me.CurrentEndurance() or 0) > 500 then
+    mq.cmdf('/disc %s', spell)
+    cast.wait_cast('CheckAura', 0, spell)
+    Write.Info('Cast aura disc %s', spell); return
+  end
+  if cast.cast(spell, 'CheckAura', mq.TLO.Me.ID()) == 'CAST_SUCCESS' then
+    Write.Info('Cast aura %s', spell)
+  end
+end
+
+----------------------------------------------------------------------
+-- Out-of-group buffing (Sub OOGBuff @7633 + CheckBuffs :OOG @7442).
+-- In-memory dedup (replaces MuleAssistOOGBuffs.ini); session-scoped.
+----------------------------------------------------------------------
+local function oog_ready(st, id)
+  local d = st.buff.oog_timers[id]; return (not d) or os.clock() >= d
+end
+local function oog_arm(st, id, name)
+  local secs = (mq.TLO.Spell(name).Duration.TotalSeconds() or 0)
+  st.buff.oog_timers[id] = os.clock() + math.max(secs, 60)
+end
+
+-- One OOG target with class/stack/stick/dedup guards. Returns true on cast success.
+local function oog_try(st, en, name, id)
+  if not id or id == 0 or id == mq.TLO.Me.ID() then return false end
+  local sp = mq.TLO.Spawn(id)
+  local dist = sp.Distance() or 9999
+  if dist >= (mq.TLO.Spell(name).Range() or 0) and dist >= (mq.TLO.Spell(name).AERange() or 0) then
+    return false
+  end
+  if not class_ok(en, sp.Class.ShortName() or '') then return false end
+  if not mq.TLO.Spell(name).StacksSpawn(id)() then return false end
+  if (sp.CachedBuff(name).Duration() or 0) > 180 then return false end
+  if st.buff.cond_on and en.cond and en.cond ~= '' and not cond.eval(en.cond) then return false end
+  if not cast.will_it_stick(name, id) then return false end
+  if not oog_ready(st, id) then return false end
+  if cast.cast(name, 'OOGBuffs-nomem', id) == 'CAST_SUCCESS' then
+    oog_arm(st, id, name)
+    Write.Info('OOG buffed %s on %s', name, sp.CleanName() or tostring(id))
+    return true
+  end
+  return false
+end
+
+-- Sub OOGBuff @7633: sweep raid / fellowship / range.
+function buff.oog_sweep(st, en, name, kind, brange)
+  if not (mq.TLO.Me.Book(name)() or mq.TLO.FindItem('=' .. name).ID()
+          or (mq.TLO.Me.AltAbility(name).Rank() or 0) > 0) then return end
+  if mq.TLO.Me.Invis() or mq.TLO.Me.Hovering() then return end
+  local function aggro()
+    return st.combat.aggro_target_id ~= nil or mq.TLO.Me.CombatState() == 'COMBAT'
+  end
+  local function in_group(cleanname)
+    return cleanname and mq.TLO.Group.Member(cleanname).ID() ~= nil
+  end
+  if kind == 'raid' then
+    for b = 0, (tonumber(mq.TLO.Raid.Members()) or 0) do
+      if aggro() and not st.flags.buff_mode then return end
+      local rm = mq.TLO.Raid.Member(b)
+      if rm.ID() and not in_group(rm.CleanName()) then oog_try(st, en, name, rm.ID()) end
+    end
+  elseif kind == 'fellowship' then
+    for b = 1, (tonumber(mq.TLO.Me.Fellowship.Members()) or 0) do
+      if aggro() and not st.flags.buff_mode then return end
+      local fname = mq.TLO.Me.Fellowship.Member(b)() or ''
+      local fid = mq.TLO.Spawn('pc =' .. fname).ID()
+      if fid and not in_group(mq.TLO.Spawn(fid).CleanName()) then oog_try(st, en, name, fid) end
+    end
+  elseif kind == 'range' then
+    local cnt = tonumber(mq.TLO.SpawnCount('pc radius ' .. brange)()) or 0
+    if not (st.flags.buff_mode or cnt <= 12) then return end
+    for b = 2, cnt do
+      if aggro() and not st.flags.buff_mode then return end
+      local id = mq.TLO.NearestSpawn(b .. ',pc radius ' .. brange).ID()
+      if id and not in_group(mq.TLO.Spawn(id).CleanName()) then oog_try(st, en, name, id) end
+    end
+  end
+end
+
+-- CheckBuffs :OOG @7442: dispatch the entry's OOG token list.
+function buff.check_oog(st, en, srange)
+  if not en.oog then return end
+  local name = en.check_name
+  for _, tok in ipairs(en.oog) do
+    if st.combat.chasing and not st.buff.while_chasing then return end
+    if tok == 'raid' and (tonumber(mq.TLO.Raid.Members()) or 0) > 0 then
+      buff.oog_sweep(st, en, name, 'raid', 0)
+    elseif tok == 'fellowship' and (tonumber(mq.TLO.Me.Fellowship.Members()) or 0) > 0 then
+      buff.oog_sweep(st, en, name, 'fellowship', 0)
+    elseif tok:sub(1, 5) == 'range' then
+      if st.flags.buff_mode then
+        buff.oog_sweep(st, en, name, 'range', tonumber(tok:sub(6)) or 100)
+      end
+    else
+      local id
+      if tok:sub(1, 7) == 'xtarget' then
+        id = mq.TLO.Me.XTarget(tonumber(tok:sub(8)) or 0).ID()
+      else
+        id = mq.TLO.Spawn('pc =' .. tok).ID()
+      end
+      if id and id ~= mq.TLO.Me.ID() and not (mq.TLO.Group.Member(mq.TLO.Spawn(id).CleanName()).ID()) then
+        if (mq.TLO.Spawn(id).Distance() or 9999) <= srange then oog_try(st, en, name, id) end
+      end
+    end
+    if (st.combat.aggro_target_id ~= nil or mq.TLO.Me.CombatState() == 'COMBAT')
+       and not st.flags.buff_mode then return end
+  end
+end
+
+----------------------------------------------------------------------
 -- Resolve effective spell range for the cast-name (CheckBuffs @6945-6960).
 ----------------------------------------------------------------------
 local function spell_range(en)
@@ -259,8 +553,22 @@ function buff.tick(st)
     if (st.combat.aggro_target_id ~= nil or mq.TLO.Me.CombatState() == 'COMBAT')
        and not st.flags.buff_mode then break end
     en.bufftype = en.bufftype or buff._bufftype(en.cast_name)
-    if not SKIP_TAGS[en.tag] and en.bufftype ~= 'command' then
-      local rng = spell_range(en)
+    local rng = spell_range(en)
+
+    if en.tag == 'Mana' or en.tag == 'Managroup' or en.tag == 'Endgroup'
+       or en.tag == 'Mount' or en.tag == 'NoGroup' then
+      -- Mana/regen run in buff.run_mana; Mount/NoGroup not handled in 3a/3b.
+    elseif en.tag == 'End' then
+      buff.check_endurance(st, en)
+    elseif en.tag == 'Summon' then
+      buff.summon_stuff(st, en)
+    elseif en.tag == 'Once' then
+      buff.buff_once(st, en)
+    elseif en.tag == 'Remove' then
+      if mq.TLO.Me.Buff(en.cast_name).ID() then mq.cmdf('/removebuff %s', en.cast_name) end
+    elseif en.tag == 'Aura' then
+      buff.check_aura(st, en.cast_name)
+    elseif en.bufftype ~= 'command' then
       local tt  = buff._target_type(en.check_name)
       local handled = false
 
@@ -279,6 +587,9 @@ function buff.tick(st)
           buff.check_self(st, en)
         end
       end
+
+      -- Out-of-group targets (named/raid/fellowship/range).
+      buff.check_oog(st, en, rng)
     end
   end
 
