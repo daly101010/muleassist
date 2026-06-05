@@ -38,6 +38,9 @@ function t.run()
   assert(st.combat.assist_at == 95, 'default AssistAt 95')
   assert(type(st.combat.dps_timers) == 'table' and type(st.combat.entries) == 'table',
     'combat tables missing')
+  assert(type(st.combat.aggro) == 'table' and type(st.combat.debuffs) == 'table',
+    'combat aggro/debuffs tables missing')
+  assert(st.combat.aggro_on == false, 'default AggroOn false')
 
   print('test_state: PASS')
   return true

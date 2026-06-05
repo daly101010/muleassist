@@ -56,14 +56,15 @@ local function parse_dps(e)
 end
 
 function combat.setup(st)
-  local dps = {}
+  local dps, debuffs = {}, {}
   for _, e in ipairs(st.lists.dps) do
     local entry = parse_dps(e)
-    if not entry.is_debuff and entry.spell ~= '' and entry.spell:lower() ~= 'null' then
-      dps[#dps + 1] = entry
+    if entry.spell ~= '' and entry.spell:lower() ~= 'null' then
+      if entry.is_debuff then debuffs[#debuffs + 1] = entry else dps[#dps + 1] = entry end
     end
   end
   st.combat.entries = dps
+  st.combat.debuffs = debuffs
 
   local burn = {}
   for _, e in ipairs(st.lists.burn) do
@@ -75,12 +76,25 @@ function combat.setup(st)
   end
   st.combat.burn = burn
 
+  -- Aggro list: Spell|PCT|GLT(< or >)|Target (Sub AggroCheck @4319-4323).
+  local aggro = {}
+  for _, e in ipairs(st.lists.aggro) do
+    local a = e.args
+    if (a[1] or '') ~= '' and (a[1] or ''):lower() ~= 'null' then
+      aggro[#aggro + 1] = { spell = a[1], pct = tonumber(a[2] or '') or 0,
+                            glt = (a[3] ~= '' and a[3]) or '<', target = (a[4] ~= '' and a[4]) or 'Mob',
+                            cond = e.cond, index = e.index }
+    end
+  end
+  st.combat.aggro = aggro
+
   -- First XTarget "Auto Hater" slot (macro XTSlot @1175-1178).
   st.combat.xtslot = 1
   for i = 1, 13 do
     if (mq.TLO.Me.XTarget(i).TargetType() or '') == 'Auto Hater' then st.combat.xtslot = i; break end
   end
-  Write.Info('combat.setup: %d dps, %d burn (xtslot=%d)', #dps, #burn, st.combat.xtslot)
+  Write.Info('combat.setup: %d dps, %d debuff, %d aggro, %d burn (xtslot=%d)',
+    #dps, #debuffs, #aggro, #burn, st.combat.xtslot)
 end
 
 ----------------------------------------------------------------------
@@ -116,9 +130,48 @@ local function dmz()
 end
 
 ----------------------------------------------------------------------
+-- Tank role: acquire own target (Sub Assist @1999-2090, simplified).
+----------------------------------------------------------------------
+local TANK_ROLES = { tank=1, pullertank=1, pettank=1, pullerpettank=1 }
+local MEZ_ANIM   = { [26]=1, [32]=1, [71]=1, [72]=1, [17]=1, [111]=1, [129]=1 }
+
+local function is_tank(st)
+  return TANK_ROLES[(st.combat.role or ''):lower()] ~= nil
+      or (st.main_assist ~= nil and st.main_assist == mq.TLO.Me.CleanName())
+end
+
+-- Pick a target as the tank from XTarget auto-haters: named first, else closest to camp.
+local function tank_pick_target(st)
+  local c = st.combat
+  if not c.aggro_target_id then return end
+  local bestNamed, bestClose, bestCloseDist
+  local cy = st.camp.y or (mq.TLO.Me.Y() or 0)
+  local cx = st.camp.x or (mq.TLO.Me.X() or 0)
+  for i = 1, 13 do
+    local xt = mq.TLO.Me.XTarget(i)
+    if (xt.ID() or 0) > 0 and (xt.TargetType() or '') == 'Auto Hater' and (xt.Type() or '') == 'NPC' then
+      if mqbool(xt.Named()) then bestNamed = xt.ID(); break end
+      local d = mq.TLO.Math.Distance(string.format('%f,%f:%f,%f', xt.Y() or 0, xt.X() or 0, cy, cx))()
+      if not bestCloseDist or (d or 9999) < bestCloseDist then bestClose = xt.ID(); bestCloseDist = d or 9999 end
+    end
+  end
+  local pick = bestNamed or bestClose
+  if pick then
+    if mq.TLO.Target.ID() ~= pick then
+      mq.cmdf('/target id %d', pick)
+      mq.delay(1000, function() return mq.TLO.Target.ID() == pick end)
+    end
+    if mq.TLO.Target.ID() == pick then
+      c.my_target_id = pick; c.my_target_name = mq.TLO.Spawn(pick).CleanName()
+    end
+  end
+end
+
+----------------------------------------------------------------------
 -- Assist (Sub Assist @1860, core): set my_target_id from the MA's target.
 ----------------------------------------------------------------------
 local function assist(st)
+  if is_tank(st) then tank_pick_target(st); return end
   local c = st.combat
   local ma = st.main_assist
   if not ma or ma == '' or ma == mq.TLO.Me.CleanName() then return end
@@ -241,6 +294,7 @@ function combat.rotation(st)
   for _, e in ipairs(c.entries) do
     local sp = mq.TLO.Spawn(tid)
     if sp.Type() == 'Corpse' or not sp.ID() then return end   -- target died
+    if c.aggro_on then combat.aggro_check(st) end
     local cast_id = tid
     if e.target == 'Me' then cast_id = mq.TLO.Me.ID()
     elseif e.target == 'MA' then cast_id = st.main_assist_id end
@@ -299,6 +353,98 @@ function combat.reset(st)
   c.my_target_id = nil
   c.my_target_name = nil
   c.burning = false
+  c.named_check = nil
+end
+
+----------------------------------------------------------------------
+-- AggroCheck (Sub AggroCheck @4299). aid (optional) = a mob to grab via Aggro entry 1.
+----------------------------------------------------------------------
+function combat.aggro_check(st, aid)
+  local c = st.combat
+  if (mq.TLO.Me.Level() or 0) < 20 then return end
+  for i, a in ipairs(c.aggro) do
+    if aid and i == 1 then cast.cast(a.spell, 'Aggro', aid) end
+    if not (c.dps_cond_on and a.cond and a.cond ~= '' and not cond.eval(a.cond)) then
+      local pa = mq.TLO.Me.PctAggro() or 0
+      local crosses = (a.glt == '<' and pa < a.pct) or (a.glt == '>' and pa > a.pct)
+      if crosses and spell_ready(a.spell) then
+        local tid
+        if a.target == 'Me' then tid = mq.TLO.Me.ID()
+        elseif a.target == 'MA' then tid = st.main_assist_id
+        elseif a.target == 'Pet' then tid = mq.TLO.Me.Pet.ID()
+        else tid = aid or c.my_target_id end
+        local inc_close = a.target == 'INC'
+          and (mq.TLO.Spawn(c.my_target_id or 0).Distance() or 9999) < c.melee_dist
+        if not inc_close and tid and cast.cast(a.spell, 'Aggro', tid) == 'CAST_SUCCESS' then
+          return
+        end
+      end
+    end
+  end
+end
+
+----------------------------------------------------------------------
+-- TankAllMobs (Sub TankAllMobs @4363, simplified): grab aggro on camp NPCs not on me.
+----------------------------------------------------------------------
+function combat.tank_all_mobs(st)
+  local c = st.combat
+  if not is_tank(st) then return end
+  local radius = st.camp.radius or 60
+  local n = tonumber(mq.TLO.SpawnCount('npc radius ' .. radius .. ' targetable zradius 10')()) or 0
+  local me = mq.TLO.Me.CleanName()
+  for j = 1, n do
+    if mq.TLO.Me.Hovering() then return end
+    local id = mq.TLO.NearestSpawn(j .. ',npc radius ' .. radius .. ' targetable zradius 10').ID()
+    if id and id ~= c.my_target_id then
+      local sp = mq.TLO.Spawn(id)
+      local an = sp.AssistName()
+      local on_group = an and an ~= '' and (mq.TLO.Spawn(an .. ' group').ID() or mq.TLO.Spawn(an .. ' raid').ID())
+      if an ~= me and on_group and not MEZ_ANIM[sp.Animation() or 0] then
+        mq.cmdf('/target id %d', id)
+        mq.delay(1000, function() return mq.TLO.Target.ID() == id end)
+        if mq.TLO.Target.ID() == id and not mq.TLO.Target.Mezzed.ID() and not mq.TLO.Target.Rooted.ID() then
+          if not mqbool(mq.TLO.Me.Combat()) then mq.cmd('/attack on') end
+          mq.cmd('/face fast nolook')
+          if mqbool(mq.TLO.Me.AbilityReady('taunt')) then mq.cmd('/doability taunt') end
+          combat.aggro_check(st, id)
+        end
+      end
+    end
+  end
+  if c.my_target_id then mq.cmdf('/target id %d', c.my_target_id) end
+end
+
+----------------------------------------------------------------------
+-- Debuff-all DPS entries (Arg2>=101; DoDebuffStuff core): apply each once to the target.
+----------------------------------------------------------------------
+function combat.debuff(st)
+  local c = st.combat
+  local tid = c.my_target_id
+  if not tid then return end
+  for _, e in ipairs(c.debuffs) do
+    local sp = mq.TLO.Spawn(tid)
+    if sp.Type() == 'Corpse' or not sp.ID() then return end
+    local has = mq.TLO.Spawn(tid).CachedBuff(e.spell).ID() ~= nil
+    if not has and spell_ready(e.spell) and ready(st, e.index, tid) and cond_pass(st, e, tid) then
+      if cast.cast(e.spell, 'dps', tid) == 'CAST_SUCCESS' then
+        arm(st, e.index, tid, math.max(mq.TLO.Spell(e.spell).Duration.TotalSeconds() or 0, c.dps_interval))
+      end
+    end
+  end
+end
+
+----------------------------------------------------------------------
+-- Named-auto-burn (Sub NamedWatch @15546, core): burn once when the target is Named.
+----------------------------------------------------------------------
+function combat.named_watch(st)
+  local c = st.combat
+  if not c.burn_all_named or c.named_check then return end
+  local tid = c.my_target_id
+  if tid and mqbool(mq.TLO.Spawn(tid).Named()) then
+    Write.Info('*** %s is NAMED -- bursting', mq.TLO.Spawn(tid).CleanName() or '?')
+    combat.burn(st)
+    c.named_check = true
+  end
 end
 
 ----------------------------------------------------------------------
@@ -327,6 +473,9 @@ function combat.tick(st)
   if can_start_combat(st) then
     c.combat_start = true
     engage(st)
+    if is_tank(st) then combat.tank_all_mobs(st) end
+    combat.debuff(st)
+    combat.named_watch(st)
     combat.rotation(st)
     if c.burning then combat.burn(st) end
   end

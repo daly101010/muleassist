@@ -46,6 +46,8 @@ function state.new(cfg)
     assist_outside= cfg:bool('General', 'AssistOutside', false),
     pet_assist_at = cfg:num('Pet', 'PetAssistAt', 95),
     pet_combat_on = cfg:bool('Pet', 'PetCombatOn', false),
+    aggro_on      = cfg:bool('Aggro', 'AggroOn', false),
+    burn_all_named= cfg:bool('Burn', 'BurnAllNamed', false),
     -- runtime
     aggro_target_id = nil,
     hostile_count   = 0,
@@ -59,8 +61,11 @@ function state.new(cfg)
     xtslot          = 1,
     dps_timers      = {},   -- [slot_index][target_id] = os.clock() deadline
     entries         = {},   -- categorized DPS list (combat.setup)
+    debuffs         = {},   -- DPS entries with Arg2>=101 (combat.setup)
+    aggro           = {},   -- parsed Aggro list (combat.setup)
     burn            = {},
     burning         = false,
+    named_check     = nil,  -- runtime: already burned this named
   }
 
   st.heal = {
