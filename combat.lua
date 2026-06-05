@@ -24,6 +24,19 @@ end
 combat.debug = true
 local function dbg(fmt, ...) if combat.debug then Write.Info('[cbtdbg] ' .. fmt, ...) end end
 
+-- Ask a DanNet peer to evaluate an MQ expression against its own state. Returns the string
+-- result, or nil if not a peer / no answer.
+local function dnet_query(peer, query, timeout)
+  if not peer or peer == '' then return nil end
+  if not ((mq.TLO.DanNet.Peers() or '') .. '|'):lower():find(peer:lower() .. '|', 1, true) then return nil end
+  mq.cmdf('/dquery %s -q "%s"', peer, query)
+  mq.delay(25)
+  mq.delay(timeout or 500, function() return (mq.TLO.DanNet(peer).Q(query).Received() or 0) > 0 end)
+  local v = mq.TLO.DanNet(peer).Q(query)()
+  if v == nil or v == '' or tostring(v):lower() == 'null' then return nil end
+  return v
+end
+
 ----------------------------------------------------------------------
 -- setup: parse DPS/Burn lists, find the XTarget Auto-Hater slot.
 ----------------------------------------------------------------------
@@ -119,14 +132,20 @@ local function assist(st)
     dbg('assist bail: MA spawn id=%s dist=%s', tostring(maSpawn.ID()), tostring(maSpawn.Distance())); return
   end
 
-  local tmp
-  if c.assist_outside then
-    local an = maSpawn.AssistName()
-    tmp = (an and mq.TLO.Spawn(an).ID()) or mq.TLO.Me.GroupAssistTarget.ID()
-  else
-    tmp = mq.TLO.Me.GroupAssistTarget.ID()
+  -- Resolve the MA's target. GroupAssistTarget needs the EQ group Main-Assist role; when it's
+  -- 0, ask the MA peer directly over DanNet (authoritative, no group-role dependency). Final
+  -- fallback: the MA spawn's AssistName (macro AssistOutside path).
+  local tmp = mq.TLO.Me.GroupAssistTarget.ID()
+  local src = 'group'
+  if not tmp or tmp == 0 then
+    local r = dnet_query(ma, 'Target.ID', 500)
+    if r then tmp = tonumber(r); src = 'dnet' end
   end
-  dbg('assist: assist_outside=%s GroupAssistTarget=%s tmp=%s', tostring(c.assist_outside),
+  if (not tmp or tmp == 0) then
+    local an = maSpawn.AssistName()
+    if an and an ~= '' then tmp = mq.TLO.Spawn(an).ID(); src = 'assistname' end
+  end
+  dbg('assist: src=%s GroupAssistTarget=%s tmp=%s', src,
       tostring(mq.TLO.Me.GroupAssistTarget.ID()), tostring(tmp))
   if not tmp or tmp == 0 then return end
 
