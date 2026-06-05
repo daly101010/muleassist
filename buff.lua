@@ -31,6 +31,36 @@ end
 -- Show a TLO result's value AND lua type, e.g. "FALSE(string)" or "true(boolean)".
 local function vt(v) return tostring(v) .. '(' .. type(v) .. ')' end
 
+----------------------------------------------------------------------
+-- DanNet peer queries. Targeting only exposes a PARTIAL buff list for other PCs, so local
+-- StacksSpawn/StacksTarget are blind to a group member's blocking buffs. Instead ask the
+-- peer to evaluate the decision against ITS OWN complete buff list (idiom from MQ2DanNet
+-- helpers: /dquery then read DanNet[peer].Q[query] once .Received() > 0).
+----------------------------------------------------------------------
+-- Returns (value, received). received=false means not a peer / no answer -> caller falls back.
+local function dnet_raw(peer, query, timeout)
+  if not peer or peer == '' or not mq.TLO.DanNet(peer)() then return nil, false end
+  mq.cmdf('/dquery %s -q "%s"', peer, query)
+  mq.delay(25)
+  mq.delay(timeout or 1000, function() return (mq.TLO.DanNet(peer).Q(query).Received() or 0) > 0 end)
+  local received = (mq.TLO.DanNet(peer).Q(query).Received() or 0) > 0
+  return mq.TLO.DanNet(peer).Q(query)(), received
+end
+
+-- Decide whether to buff a peer with `spell`, using the peer's own view:
+--   'skip'  -> already has it (>30s) OR it won't stack (blocked by another buff)
+--   'cast'  -> missing/expiring AND it will stack
+--   nil     -> not a DanNet peer / no answer -> caller uses local checks
+local function peer_buff_decision(st, peer, spell)
+  if not st.flags.dannet_on then return nil end
+  local dur, ok = dnet_raw(peer, 'Me.Buff[' .. spell .. '].Duration.TotalSeconds', 1000)
+  if not ok then return nil end
+  if dur and tonumber(dur) and tonumber(dur) > 30 then return 'skip' end  -- still buffed
+  local stk, ok2 = dnet_raw(peer, 'Spell[' .. spell .. '].Stacks', 1000)
+  if not ok2 then return nil end
+  return mqbool(stk) and 'cast' or 'skip'
+end
+
 -- Indirection so categorization is testable offline (overridden in tests).
 function buff._target_type(name) return (mq.TLO.Spell(name).TargetType() or '') end
 
@@ -149,13 +179,21 @@ function buff.check_group(st, en, spell_to_cast, buff_sub, spell_range)
         dbg('p1 %s/ME Stacks=%s -> %s', sb, vt(raw), tostring(mqbool(raw)))
         if not mqbool(raw) then break end
       else
-        cache_buffs(id)
-        local cd = mq.TLO.Spawn(id).CachedBuff(sb).Duration.TotalSeconds() or 0
-        if cd > 30 then dbg('p1 %s/%s skip: cached dur %s>30', sb, nm, tostring(cd)); break end
-        local raw = mq.TLO.Spell(sb).StacksSpawn(id)()
-        dbg('p1 %s/%s StacksSpawn=%s -> %s (cachedCnt=%s)', sb, nm, vt(raw), tostring(mqbool(raw)),
-            tostring(mq.TLO.Spawn(id).CachedBuffCount()))
-        if not mqbool(raw) then break end
+        local decision = peer_buff_decision(st, nm, sb)
+        if decision ~= nil then
+          dbg('p1 %s/%s DanNet decision=%s', sb, nm, decision)
+          if decision == 'skip' then break end
+          -- 'cast' -> falls through to add to list
+        else
+          -- Fallback: no DanNet peer answer; use the (partial) local view.
+          cache_buffs(id)
+          local cd = mq.TLO.Spawn(id).CachedBuff(sb).Duration.TotalSeconds() or 0
+          if cd > 30 then dbg('p1 %s/%s skip: cached dur %s>30', sb, nm, tostring(cd)); break end
+          local raw = mq.TLO.Spell(sb).StacksSpawn(id)()
+          dbg('p1 %s/%s StacksSpawn=%s -> %s (cachedCnt=%s, no dnet)', sb, nm, vt(raw),
+              tostring(mqbool(raw)), tostring(mq.TLO.Spawn(id).CachedBuffCount()))
+          if not mqbool(raw) then break end
+        end
       end
       dbg('p1 %s/%s ADDED to cast list', sb, nm)
       list[#list + 1] = j
@@ -180,13 +218,13 @@ function buff.check_group(st, en, spell_to_cast, buff_sub, spell_range)
       -- populated. Pass-1 StacksSpawn is optimistic before the target's buffs are cached
       -- (returns true), so a buff blocked by a DIFFERENT buff (e.g. the cleric's) would
       -- otherwise get memmed+cast here. StacksTarget reads the live target's buffs.
+      -- Stacking authority is pass-1 (DanNet peer query for grouped PCs). Here we only confirm
+      -- we successfully targeted them and they don't already show the buff locally.
       local tgtOk = mq.TLO.Target.ID() == id
       local hasBuff = mq.TLO.Target.Buff(sb).ID()
-      local stRaw = mq.TLO.Spell(spell_to_cast).StacksTarget()
-      dbg('p2 %s/%s targetOk=%s hasBuff=%s StacksTarget=%s -> %s',
-          spell_to_cast, (gm.CleanName() or ('m'..j)), tostring(tgtOk), tostring(hasBuff),
-          vt(stRaw), tostring(mqbool(stRaw)))
-      if tgtOk and not hasBuff and mqbool(stRaw) then
+      dbg('p2 %s/%s targetOk=%s hasBuff=%s', spell_to_cast, (gm.CleanName() or ('m'..j)),
+          tostring(tgtOk), tostring(hasBuff))
+      if tgtOk and not hasBuff then
         dbg('p2 %s -> CASTING on %s', spell_to_cast, (gm.CleanName() or ('m'..j)))
         mq.delay(3000, function() return not mq.TLO.Me.SpellInCooldown() end)
         if en.mgb and mq.TLO.Me.AltAbilityReady('Mass Group Buff')() then
@@ -215,16 +253,18 @@ function buff.check_ma(st, en, spell_range)
   if (mq.TLO.Spawn('=' .. ma).Distance() or 9999) > spell_range then return end
   local sb = silver(en.check_name)
   if st.buff.cond_on and en.cond and en.cond ~= '' and not cond.eval(en.cond) then return end
-  cache_buffs(mat_id)
-  local maSpawnRaw = mq.TLO.Spell(sb).StacksSpawn(mat_id)()
-  dbg('ma %s StacksSpawn=%s -> %s', sb, vt(maSpawnRaw), tostring(mqbool(maSpawnRaw)))
-  if not mqbool(maSpawnRaw) then return end
-  -- Authoritative stacking check against the now-targeted MA (StacksSpawn can be optimistic).
-  local maTgtRaw = mq.TLO.Spell(en.check_name).StacksTarget()
-  dbg('ma %s targetOk=%s StacksTarget=%s -> %s', en.check_name, tostring(mq.TLO.Target.ID() == mat_id),
-      vt(maTgtRaw), tostring(mqbool(maTgtRaw)))
-  if mq.TLO.Target.ID() == mat_id and not mqbool(maTgtRaw) then return end
-  if (mq.TLO.Spawn(mat_id).CachedBuff(sb).Duration() or 0) > 1000 then return end
+  -- Authoritative stacking via the MA's own buff list when it's a DanNet peer.
+  local decision = peer_buff_decision(st, ma, sb)
+  if decision ~= nil then
+    dbg('ma %s DanNet decision=%s', sb, decision)
+    if decision == 'skip' then return end
+  else
+    cache_buffs(mat_id)
+    local raw = mq.TLO.Spell(sb).StacksSpawn(mat_id)()
+    dbg('ma %s StacksSpawn=%s -> %s (no dnet)', sb, vt(raw), tostring(mqbool(raw)))
+    if not mqbool(raw) then return end
+    if (mq.TLO.Spawn(mat_id).CachedBuff(sb).Duration() or 0) > 1000 then return end
+  end
   if not ready(st, en.index, 7) then return end
   if cast.cast(en.check_name, 'Buffs-nomem', mat_id) == 'CAST_SUCCESS' then
     Write.Info('Buffed %s on >> MA %s <<', en.check_name, ma)
