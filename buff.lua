@@ -12,6 +12,17 @@ local buff  = {}
 local CASTER = { CLR=1,DRU=1,SHM=1,BST=1,ENC=1,MAG=1,NEC=1,PAL=1,SHD=1,RNG=1,WIZ=1 }
 local MELEE  = { BRD=1,BER=1,BST=1,MNK=1,PAL=1,ROG=1,RNG=1,SHD=1,WAR=1 }
 
+-- MQ bool TLO members (Stacks/StacksSpawn/StacksTarget) can come back as the STRINGS
+-- "TRUE"/"FALSE"/"NULL" rather than Lua booleans -- and "FALSE" is truthy in Lua, so a
+-- naive `if not Spell.StacksSpawn(id)()` never skips a non-stacking buff. Coerce robustly.
+local function mqbool(v)
+  local t = type(v)
+  if t == 'boolean' then return v end
+  if t == 'number'  then return v ~= 0 end
+  if t == 'string'  then local u = v:upper(); return u == 'TRUE' or u == '1' end
+  return false  -- nil/unknown -> treat as "no" (don't stack / not ready), the safe default
+end
+
 -- Indirection so categorization is testable offline (overridden in tests).
 function buff._target_type(name) return (mq.TLO.Spell(name).TargetType() or '') end
 
@@ -125,11 +136,11 @@ function buff.check_group(st, en, spell_to_cast, buff_sub, spell_range)
 
       if id == me_id then
         if mq.TLO.Me.Buff(sb).ID() or mq.TLO.Me.Song(sb).ID() then break end
-        if not mq.TLO.Spell(sb).Stacks() then break end
+        if not mqbool(mq.TLO.Spell(sb).Stacks()) then break end
       else
         cache_buffs(id)
         if (mq.TLO.Spawn(id).CachedBuff(sb).Duration.TotalSeconds() or 0) > 30 then break end
-        if not mq.TLO.Spell(sb).StacksSpawn(id)() then break end
+        if not mqbool(mq.TLO.Spell(sb).StacksSpawn(id)()) then break end
       end
       list[#list + 1] = j
     until true
@@ -154,7 +165,7 @@ function buff.check_group(st, en, spell_to_cast, buff_sub, spell_range)
       -- (returns true), so a buff blocked by a DIFFERENT buff (e.g. the cleric's) would
       -- otherwise get memmed+cast here. StacksTarget reads the live target's buffs.
       if mq.TLO.Target.ID() == id and not mq.TLO.Target.Buff(sb).ID()
-         and mq.TLO.Spell(spell_to_cast).StacksTarget() then
+         and mqbool(mq.TLO.Spell(spell_to_cast).StacksTarget()) then
         mq.delay(3000, function() return not mq.TLO.Me.SpellInCooldown() end)
         if en.mgb and mq.TLO.Me.AltAbilityReady('Mass Group Buff')() then
           mq.cmd('/alt act 35'); mq.delay(100)
@@ -183,9 +194,9 @@ function buff.check_ma(st, en, spell_range)
   local sb = silver(en.check_name)
   if st.buff.cond_on and en.cond and en.cond ~= '' and not cond.eval(en.cond) then return end
   cache_buffs(mat_id)
-  if not mq.TLO.Spell(sb).StacksSpawn(mat_id)() then return end
+  if not mqbool(mq.TLO.Spell(sb).StacksSpawn(mat_id)()) then return end
   -- Authoritative stacking check against the now-targeted MA (StacksSpawn can be optimistic).
-  if mq.TLO.Target.ID() == mat_id and not mq.TLO.Spell(en.check_name).StacksTarget() then return end
+  if mq.TLO.Target.ID() == mat_id and not mqbool(mq.TLO.Spell(en.check_name).StacksTarget()) then return end
   if (mq.TLO.Spawn(mat_id).CachedBuff(sb).Duration() or 0) > 1000 then return end
   if not ready(st, en.index, 7) then return end
   if cast.cast(en.check_name, 'Buffs-nomem', mat_id) == 'CAST_SUCCESS' then
@@ -201,7 +212,7 @@ end
 function buff.check_self(st, en)
   local sb = silver(en.check_name)
   if mq.TLO.Me.Buff(sb).ID() or mq.TLO.Me.Song(sb).ID() then return end
-  if not mq.TLO.Spell(sb).Stacks() then return end
+  if not mqbool(mq.TLO.Spell(sb).Stacks()) then return end
   if st.buff.cond_on and en.cond and en.cond ~= '' and not cond.eval(en.cond) then return end
   if not ready(st, en.index, 0) then return end
   if en.mgb and mq.TLO.Me.AltAbilityReady('Tranquil Blessing')() then
@@ -312,7 +323,7 @@ end
 
 function buff.buff_once(st, en)
   if mq.TLO.Me.Invis() or mq.TLO.Me.Hovering() then return end
-  if not mq.TLO.Spell(en.cast_name).Stacks() then return end
+  if not mqbool(mq.TLO.Spell(en.cast_name).Stacks()) then return end
   if not ready(st, en.index, 0) then return end
   if cast.cast(en.cast_name, 'CheckEndurance', mq.TLO.Me.ID()) == 'CAST_SUCCESS' then
     arm(st, en.index, 0, en.cast_name)
@@ -395,7 +406,7 @@ local function oog_try(st, en, name, id)
     return false
   end
   if not class_ok(en, sp.Class.ShortName() or '') then return false end
-  if not mq.TLO.Spell(name).StacksSpawn(id)() then return false end
+  if not mqbool(mq.TLO.Spell(name).StacksSpawn(id)()) then return false end
   if (sp.CachedBuff(name).Duration() or 0) > 180 then return false end
   if st.buff.cond_on and en.cond and en.cond ~= '' and not cond.eval(en.cond) then return false end
   if not cast.will_it_stick(name, id) then return false end
