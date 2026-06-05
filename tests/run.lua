@@ -9,6 +9,7 @@ local mods = {
   'muleassist.tests.test_cast_mem',
   'muleassist.tests.test_buff',
   'muleassist.tests.test_petbuff',
+  'muleassist.tests.test_serialize',
 }
 
 local ok_all = true
