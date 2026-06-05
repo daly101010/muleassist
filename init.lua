@@ -10,6 +10,7 @@ local rez    = require('muleassist.rez')
 local buff   = require('muleassist.buff')
 local petbuff = require('muleassist.petbuff')
 local combat = require('muleassist.combat')
+local med    = require('muleassist.med')
 
 local function find_config_path(server, char)
   local cfgdir = mq.TLO.MacroQuest.Path('config')() or '.'
@@ -84,6 +85,9 @@ local function main(...)
     -- CheckForCombat (@1576/Sub Main): assist + DPS/melee. Populates st.combat.* that the
     -- heal/buff/rez combat gates read; internally gated on DPSOn/MeleeOn + combat state.
     combat.tick(st)
+    -- DoWeMed (@1577): sit to recover when idle/out of combat (non-blocking; after combat so
+    -- combat takes priority and won't be interrupted by sitting).
+    med.tick(st)
     mq.delay(250)
   end
 

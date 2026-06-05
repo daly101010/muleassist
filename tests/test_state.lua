@@ -42,6 +42,9 @@ function t.run()
     'combat aggro/debuffs tables missing')
   assert(st.combat.aggro_on == false, 'default AggroOn false')
 
+  assert(type(st.med) == 'table', 'st.med missing')
+  assert(st.med.start == 20, 'MedStart from fixture (20)')
+
   print('test_state: PASS')
   return true
 end

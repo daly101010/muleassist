@@ -119,6 +119,12 @@ function state.new(cfg)
     exceed = cfg:num('General', 'CampRadiusExceed', 400),
   }
 
+  st.med = {
+    on      = cfg:bool('General', 'MedOn', false),     -- meditate when idle/out of combat
+    start   = cfg:num('General', 'MedStart', 90),      -- sit when the med stat drops below this %
+    medding = false,                                    -- runtime: currently sitting to recover
+  }
+
   st.lists = {
     dps       = cfg:list('dps'),
     heals     = cfg:list('heals'),
