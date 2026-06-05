@@ -517,6 +517,13 @@ local BUFF_TAGS = { '', 'Me', 'MA', '!MA', '!ME', 'caster', 'Melee', 'class',
 local BUFF_PREFIXES = { '(none)', 'item', 'command', 'summoned' }
 local HEAL_TAGS = { '', 'MA', 'Me', '!MA', 'pet', '!pet', 'Mob', 'Tap', 'xtar' }
 
+-- Persistent per-entry working structs. The structured editors mutate these across frames
+-- (immediate mode) instead of re-parsing the INI string every frame, which would wipe
+-- transient UI state (an enabled-but-empty OOG, a freshly-added blank name row, etc.).
+-- We re-parse only when the underlying raw value changed from outside our own writes.
+local buffEdit = {}  -- [valueKey] = { entry = <parsed buff>, srcRaw = <string we last wrote> }
+local healEdit = {}  -- [valueKey] = { entry = <parsed heal>, srcRaw = <string we last wrote> }
+
 -- Live PC names for the OOG "add from nearby" picker: group + raid + nearby PCs.
 local function live_pc_names()
   local seen, out = {}, {}
@@ -529,13 +536,9 @@ local function live_pc_names()
   return out
 end
 
--- OOG builder: mutates `oog` ({names={},xtargets={},raid,fellowship,range}) in place.
--- Returns the oog table (or nil if disabled).
+-- OOG builder: renders flags + name rows for a NON-NIL `oog` table, mutating it in place.
+-- The enable checkbox lives in the caller (persistent working struct).
 local function DrawOOGBuilder(idbase, oog)
-  local enabled = oog ~= nil
-  enabled = ImGui.Checkbox('Out-of-group targets##oog'..idbase, enabled)
-  if not enabled then return nil end
-  oog = oog or { names = {}, xtargets = {} }
   oog.names = oog.names or {}
   oog.xtargets = oog.xtargets or {}
 
@@ -587,7 +590,13 @@ local function DrawStructuredBuff(sectionName, valueKey, value)
   local condRaw = cfg[condKey]
   if condRaw == 'NULL' then condRaw = nil end
 
-  local e = serialize.parse_buff(raw, condRaw)
+  -- Use the persistent working struct; re-parse only if the raw changed outside our writes.
+  local cur = buffEdit[valueKey]
+  if not cur or cur.srcRaw ~= raw then
+    cur = { entry = serialize.parse_buff(raw, condRaw), srcRaw = raw }
+    buffEdit[valueKey] = cur
+  end
+  local e = cur.entry
 
   ImGui.PushStyleColor(ImGuiCol.Text, 0, 1, 1, 1)
   ImGui.Text(valueKey); ImGui.PopStyleColor()
@@ -656,8 +665,14 @@ local function DrawStructuredBuff(sectionName, valueKey, value)
     ImGui.PopItemWidth()
   end
 
-  -- OOG builder
-  e.oog = DrawOOGBuilder(valueKey, e.oog)
+  -- OOG builder (enable state held in the persistent working struct so it doesn't revert).
+  local oogOn = ImGui.Checkbox('Out-of-group targets##oog'..valueKey, e.oog ~= nil)
+  if oogOn then
+    e.oog = e.oog or { names = {}, xtargets = {} }
+    DrawOOGBuilder(valueKey, e.oog)
+  else
+    e.oog = nil
+  end
 
   -- Condition
   if value['Conditions'] then
@@ -668,12 +683,11 @@ local function DrawStructuredBuff(sectionName, valueKey, value)
     utils.HelpMarker(value['CondTooltip'] or '')
   end
 
-  -- Serialize back to the INI table.
-  if e.name and e.name ~= '' then
-    cfg[valueKey] = serialize.buff_to_string(e)
-  else
-    cfg[valueKey] = ''
-  end
+  -- Serialize back; remember our own output so we don't re-parse it next frame (which would
+  -- discard transient UI state like an empty name row or enabled-empty OOG).
+  local out = (e.name and e.name ~= '') and serialize.buff_to_string(e) or ''
+  cfg[valueKey] = out
+  cur.srcRaw = out
   cfg[condKey] = e.cond or 'NULL'
 end
 
@@ -687,7 +701,12 @@ local function DrawStructuredHeal(sectionName, valueKey, value)
   local condRaw = cfg[condKey]
   if condRaw == 'NULL' then condRaw = nil end
 
-  local e = serialize.parse_heal(raw, condRaw)
+  local cur = healEdit[valueKey]
+  if not cur or cur.srcRaw ~= raw then
+    cur = { entry = serialize.parse_heal(raw, condRaw), srcRaw = raw }
+    healEdit[valueKey] = cur
+  end
+  local e = cur.entry
 
   ImGui.PushStyleColor(ImGuiCol.Text, 0, 1, 1, 1)
   ImGui.Text(valueKey); ImGui.PopStyleColor()
@@ -723,11 +742,9 @@ local function DrawStructuredHeal(sectionName, valueKey, value)
     utils.HelpMarker(value['CondTooltip'] or '')
   end
 
-  if e.name and e.name ~= '' then
-    cfg[valueKey] = serialize.heal_to_string(e)
-  else
-    cfg[valueKey] = ''
-  end
+  local out = (e.name and e.name ~= '') and serialize.heal_to_string(e) or ''
+  cfg[valueKey] = out
+  cur.srcRaw = out
   cfg[condKey] = e.cond or 'NULL'
 end
 

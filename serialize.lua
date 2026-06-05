@@ -36,7 +36,9 @@ local function emit_oog(oog)
   if oog.fellowship then toks[#toks + 1] = 'fellowship' end
   if oog.range then toks[#toks + 1] = 'range' .. oog.range end
   for _, x in ipairs(oog.xtargets or {}) do toks[#toks + 1] = 'xtarget' .. x end
-  for _, n in ipairs(oog.names or {}) do toks[#toks + 1] = n end
+  for _, n in ipairs(oog.names or {}) do
+    if n ~= '' then toks[#toks + 1] = n end   -- skip blank UI rows
+  end
   return table.concat(toks, ',')
 end
 
