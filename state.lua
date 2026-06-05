@@ -67,7 +67,6 @@ function state.apply_config(st, cfg)
   st.pet.buffs_on     = cfg:bool('Pet', 'PetBuffsOn', false)
   st.pet.shrink_on    = cfg:bool('Pet', 'PetShrinkOn', false)
   st.pet.shrink_spell = cfg:get('Pet', 'PetShrinkSpell', 'Tiny Companion')
-  st.pet.check_secs   = 60
 
   -- cfg MainAssist wins, but keep an arg/auto-derived value if cfg is empty
   st.main_assist = cfg:get('General', 'MainAssist', nil) or st.main_assist
@@ -150,7 +149,7 @@ function state.new(cfg)
 
   st.buff.entries = {}; st.buff.timers = {}; st.buff.oog_timers = {}; st.buff.read_deadline = 0
 
-  st.pet.check_deadline = 0; st.pet.entries = {}
+  st.pet.check_secs = 60; st.pet.check_deadline = 0; st.pet.entries = {}
 
   st.main_assist_id = 0
 
