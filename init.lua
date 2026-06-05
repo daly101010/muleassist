@@ -76,7 +76,9 @@ local function main(...)
       _G.MULEASSIST_EMBED = nil    -- load-time guard already ran; don't leak to other scripts
       if not ok then Write.Error('MAUI load failed: %s', tostring(mod)); return end
       ui_mod = mod
-      ui_mod.mount{ window = 'MuleAssist', ini_path = path,
+      -- No explicit window id: mount() defaults to a bot-unique 'MuleAssistBot' so the
+      -- callback registry can't collide with the standalone UI's 'MuleAssist' (crash on unload).
+      ui_mod.mount{ ini_path = path,
                     on_apply = function() st.pending_reapply = true end }
       return                       -- mount() opens the window
     end
@@ -124,6 +126,10 @@ local function main(...)
     med.tick(st)
     mq.delay(250)
   end
+
+  -- Tear down the embedded MAUI ImGui callback before the script exits, so mq2lua doesn't
+  -- invoke/free it into a dead Lua state on unload (OnUnloadPlugin crash).
+  if ui_mod then pcall(ui_mod.unmount) end
 
   Write.Info('MuleAssist-Lua stopped.')
 end

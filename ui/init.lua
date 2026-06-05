@@ -1617,7 +1617,10 @@ function M.mount(opts)
     end
     cfg_snapshot = diff.snapshot(globals.Config or {})
     open = true
-    mq.imgui.init(apply_opts.window or 'MuleAssist', function()
+    -- Registration id MUST differ from the standalone's 'MuleAssist' or mq2lua's callback
+    -- registry collides and crashes on unload (OnUnloadPlugin). Default to a bot-unique id.
+    apply_opts.window = apply_opts.window or 'MuleAssistBot'
+    mq.imgui.init(apply_opts.window, function()
         build_trees()
         MAUI()
     end)
@@ -1625,6 +1628,13 @@ end
 
 function M.toggle() open = not open end
 function M.show()   open = true  end
+
+-- Tear down the registered ImGui callback. Call before the host script stops so mq2lua
+-- doesn't try to invoke/free a callback into a dead Lua state on unload.
+function M.unmount()
+    open = false
+    if apply_opts and apply_opts.window then pcall(mq.imgui.destroy, apply_opts.window) end
+end
 
 -- Standalone entry: original /lua run muleassist/ui behavior (own loop + binds).
 function M.run_standalone()
