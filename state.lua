@@ -119,6 +119,14 @@ function state.new(cfg)
     exceed = cfg:num('General', 'CampRadiusExceed', 400),
   }
 
+  st.move = {
+    return_to_camp = cfg:bool('General', 'ReturnToCamp', false),
+    return_accuracy= cfg:num('General', 'ReturnToCampAccuracy', 10),
+    chase_assist   = cfg:bool('General', 'ChaseAssist', false),
+    chase_distance = cfg:num('General', 'ChaseDistance', 25),
+    chase_name     = nil,   -- defaults to MA at setup; a bind can change it later
+  }
+
   st.med = {
     on         = cfg:bool('General', 'MedOn', false),  -- meditate when idle/out of combat
     start      = cfg:num('General', 'MedStart', 90),   -- sit when a med stat drops below this %

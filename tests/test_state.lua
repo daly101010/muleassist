@@ -45,6 +45,9 @@ function t.run()
   assert(type(st.med) == 'table', 'st.med missing')
   assert(st.med.start == 20, 'MedStart from fixture (20)')
 
+  assert(type(st.move) == 'table', 'st.move missing')
+  assert(st.move.chase_distance == 25, 'default ChaseDistance 25')
+
   print('test_state: PASS')
   return true
 end

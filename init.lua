@@ -11,6 +11,7 @@ local buff   = require('muleassist.buff')
 local petbuff = require('muleassist.petbuff')
 local combat = require('muleassist.combat')
 local med    = require('muleassist.med')
+local move   = require('muleassist.move')
 
 local function find_config_path(server, char)
   local cfgdir = mq.TLO.MacroQuest.Path('config')() or '.'
@@ -50,6 +51,8 @@ local function main(...)
   buff.setup(st)
   petbuff.setup(st)
   combat.setup(st)
+  move.set_camp(st)
+  st.move.chase_name = st.main_assist
 
   Write.Info('MuleAssist-Lua loaded. Role=%s MA=%s AssistAt=%d',
     st.role, tostring(st.main_assist), cfg:num('Melee', 'AssistAt', 95))
@@ -58,6 +61,8 @@ local function main(...)
 
   mq.bind('/maquit', function() st.running = false end)
   mq.bind('/maburn', function() st.combat.burning = true end)
+  mq.bind('/macamp', function() move.set_camp(st) end)
+  mq.bind('/macamphere', function() st.move.return_to_camp = true; move.set_camp(st) end)
 
   while st.running do
     mq.doevents()
@@ -85,6 +90,9 @@ local function main(...)
     -- CheckForCombat (@1576/Sub Main): assist + DPS/melee. Populates st.combat.* that the
     -- heal/buff/rez combat gates read; internally gated on DPSOn/MeleeOn + combat state.
     combat.tick(st)
+    -- DoWeMove (@5571/Combat @2597): return-to-camp / chase the MA. Non-blocking; after combat
+    -- (don't move mid-fight) and before med (med skips while Navigation.Active).
+    move.tick(st)
     -- DoWeMed (@1577): sit to recover when idle/out of combat (non-blocking; after combat so
     -- combat takes priority and won't be interrupted by sitting).
     med.tick(st)

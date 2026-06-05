@@ -225,7 +225,7 @@ local function can_start_combat(st)
   -- Camp-distance gate: anchor on SELF when tanking (we are the camp center), else on the MA.
   local ay, ax
   if is_tank(st) then
-    ay, ax = mq.TLO.Me.Y(), mq.TLO.Me.X()
+    ay, ax = st.camp.y or mq.TLO.Me.Y(), st.camp.x or mq.TLO.Me.X()
   else
     local ma = mq.TLO.Spawn('=' .. (st.main_assist or ''))
     if ma.ID() then ay, ax = ma.Y(), ma.X() end
