@@ -73,6 +73,13 @@ local function do_return(st)
   end
 end
 
+-- Force a return-to-camp move this tick, ignoring the return_to_camp flag and combat gate.
+-- Used by pull.lua's inbound phase (the pulled mob is aggro'd, so move.tick would otherwise
+-- refuse to move). Single command per tick.
+function move.return_now(st)
+  do_return(st)
+end
+
 function move.tick(st)
   local m = st.move
   if st.flags.buff_mode or st.flags.zombie_mode then return end

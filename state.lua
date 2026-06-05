@@ -127,6 +127,24 @@ function state.new(cfg)
     chase_name     = nil,   -- defaults to MA at setup; a bind can change it later
   }
 
+  st.pull = {
+    with        = cfg:get('Pull', 'PullWith', 'Melee'),
+    max_radius  = cfg:num('Pull', 'MaxRadius', 350),
+    max_z       = cfg:num('Pull', 'MaxZRange', 50),
+    wait        = cfg:num('Pull', 'PullWait', 5),
+    cond        = cfg:get('Pull', 'PullCond', nil),
+    mobs        = cfg:get('Pull', 'MobsToPull', 'All'),
+    namedsfirst = cfg:bool('Pull', 'PullNamedsFirst', false),
+    level_raw   = cfg:get('Pull', 'PullLevel', '0|0'),
+    melee_dist  = cfg:num('Melee', 'MeleeDistance', 25),
+    -- resolved by pull.setup
+    range = 15, range_type = 'Melee', pull_min = 1, pull_max = 200, mob_list = nil,
+    -- runtime
+    state = 'idle', target_id = nil, abort_deadline = 0, wait_until = 0, attempts = 0,
+  }
+  -- Puller travels out to MaxRadius; don't let the camp leash abort it (macro @5583).
+  if st.pull.max_radius + 1 > st.camp.exceed then st.camp.exceed = st.pull.max_radius + 1 end
+
   st.med = {
     on         = cfg:bool('General', 'MedOn', false),  -- meditate when idle/out of combat
     start      = cfg:num('General', 'MedStart', 90),   -- sit when a med stat drops below this %

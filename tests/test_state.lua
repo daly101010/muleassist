@@ -48,6 +48,10 @@ function t.run()
   assert(type(st.move) == 'table', 'st.move missing')
   assert(st.move.chase_distance == 25, 'default ChaseDistance 25')
 
+  assert(type(st.pull) == 'table', 'st.pull missing')
+  assert(st.pull.max_radius == 350, 'MaxRadius from fixture (350)')
+  assert(st.pull.state == 'idle', 'pull starts idle')
+
   print('test_state: PASS')
   return true
 end

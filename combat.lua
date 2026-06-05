@@ -466,6 +466,9 @@ function combat.tick(st)
   local c = st.combat
   if st.flags.buff_mode or st.flags.zombie_mode then return end
   if mq.TLO.Me.Hovering() then return end
+  -- Don't engage while actively pulling (fetching/dragging) -- combat takes over once the
+  -- pull resets at camp (hunters reset in-place, so they engage next tick).
+  if st.pull and st.pull.state ~= 'idle' then return end
   if dmz() then return end
   if not (c.dps_on or c.melee_on) then refresh_state(st); return end
 

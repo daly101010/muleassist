@@ -12,6 +12,7 @@ local petbuff = require('muleassist.petbuff')
 local combat = require('muleassist.combat')
 local med    = require('muleassist.med')
 local move   = require('muleassist.move')
+local pull   = require('muleassist.pull')
 
 local function find_config_path(server, char)
   local cfgdir = mq.TLO.MacroQuest.Path('config')() or '.'
@@ -51,6 +52,7 @@ local function main(...)
   buff.setup(st)
   petbuff.setup(st)
   combat.setup(st)
+  pull.setup(st)
   move.set_camp(st)
   st.move.chase_name = st.main_assist
 
@@ -87,6 +89,9 @@ local function main(...)
     buff.tick(st)
     -- CheckPetBuffs (@1569): own slot, gated on PetBuffsOn + pet exists + 60s throttle.
     petbuff.tick(st)
+    -- FindMobToPull (@1597): puller/hunter fetch a mob to camp. Runs before combat so it
+    -- drives movement during the pull (combat stands down while st.pull.state ~= 'idle').
+    pull.tick(st)
     -- CheckForCombat (@1576/Sub Main): assist + DPS/melee. Populates st.combat.* that the
     -- heal/buff/rez combat gates read; internally gated on DPSOn/MeleeOn + combat state.
     combat.tick(st)
