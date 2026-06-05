@@ -60,6 +60,11 @@ local function main(...)
 
   while st.running do
     mq.doevents()
+    -- Default MainAssist to the game's group main assist if it wasn't configured/passed.
+    if not st.main_assist or st.main_assist == '' then
+      local gma = mq.TLO.Group.MainAssist.CleanName()
+      if gma and gma ~= '' then st.main_assist = gma end
+    end
     -- Keep MainAssistID fresh (macro @1607); heal MA-heals and combat 'MA'-target DPS need it.
     st.main_assist_id = mq.TLO.Spawn('=' .. (st.main_assist or '')).ID() or 0
     -- Refresh combat state early so heal/buff/rez gates (aggro_target_id) are current this tick.
