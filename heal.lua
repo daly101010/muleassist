@@ -63,6 +63,10 @@ local function spell_ready(name)
     or mq.TLO.Me.CombatAbilityReady(name)()
 end
 
+-- ${Group} numeric count. The Lua binding returns the string "FALSE" when solo, so
+-- coerce; tonumber("FALSE") -> nil -> 0.
+local function group_size() return tonumber(mq.TLO.Group()) or 0 end
+
 ----------------------------------------------------------------------
 -- Categorization (FindSingleHeals + FindGroupHeals)
 ----------------------------------------------------------------------
@@ -298,7 +302,7 @@ function heal.do_group(st, group_health)
     local pct = tonumber(g.args[2]) or 0
     if st.heal.cond_on and g.cond and g.cond ~= '' and not cond.eval(g.cond) then
       -- condition false: skip this group heal
-    elseif group_health <= pct and ready_group(st, j) and mq.TLO.Group() then
+    elseif group_health <= pct and ready_group(st, j) and group_size() > 0 then
       local result = cast.cast(g.spell, 'GroupHeal', mq.TLO.Me.ID())
       if result == 'CAST_SUCCESS' then
         Write.Info('%s on >> Group <<', g.spell)
@@ -369,8 +373,8 @@ function heal.tick(st)
       end
 
       -- most-hurt group member (mode 1 or 2)
-      if (mode == 1 or mode == 2) and mq.TLO.Group() then
-        local n = mq.TLO.Group() or 0
+      if (mode == 1 or mode == 2) and group_size() > 0 then
+        local n = group_size()
         local mh_name, mh_type, mh_id, mh_hp, mh_no = nil, nil, 0, 100, 0
         for i = 0, n do
           local gm = mq.TLO.Group.Member(i)
@@ -398,7 +402,7 @@ function heal.tick(st)
     end
 
     -- group heals
-    if GROUPHEAL_CLASSES[cls] and mq.TLO.Group() then
+    if GROUPHEAL_CLASSES[cls] and group_size() > 0 then
       heal.do_group(st, mq.TLO.Group.AvgHPs())
     end
 

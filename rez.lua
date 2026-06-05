@@ -42,7 +42,7 @@ function rez.check(st)
   local radius  = st.rez.radius
 
   -- 1) Group member corpses (battle rez)
-  local gn = mq.TLO.Group() or 0
+  local gn = tonumber(mq.TLO.Group()) or 0
   for i = 1, gn do
     local gm    = mq.TLO.Group.Member(i)
     local mname = gm.Name()

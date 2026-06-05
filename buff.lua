@@ -94,6 +94,10 @@ local function cache_buffs(id)
   mq.delay(3000, function() return (mq.TLO.Target.CachedBuffCount() or -1) ~= -1 end)
 end
 
+-- ${Group} numeric count. The Lua binding returns the string "FALSE" when solo, so
+-- coerce; tonumber("FALSE") -> nil -> 0.
+local function group_size() return tonumber(mq.TLO.Group()) or 0 end
+
 local function archetype_ok(tag, short)
   if tag == 'caster' then return CASTER[short] ~= nil end
   if tag == 'Melee'  then return MELEE[short]  ~= nil end
@@ -109,7 +113,7 @@ function buff.check_group(st, en, spell_to_cast, buff_sub, spell_range)
   local me_id = mq.TLO.Me.ID()
   local list = {}
 
-  local gn = mq.TLO.Group() or 0
+  local gn = group_size()
   for j = 0, gn do
     -- combat abort (macro re-runs GetHostilesOnXTarget per member); CombatState fallback
     -- until Phase 4 supplies aggro_target_id. BuffMode overrides.
@@ -168,7 +172,7 @@ function buff.check_group(st, en, spell_to_cast, buff_sub, spell_range)
           arm(st, en.index, j, en.check_name)
           buff.write_buffs(st)
           if (mq.TLO.Spell(spell_to_cast).TargetType() or ''):find('Group v') then return true end
-          if (mq.TLO.Group() or 0) == j then return true end
+          if group_size() == j then return true end
         end
       end
     end
@@ -265,7 +269,7 @@ function buff.tick(st)
       end
 
       if not handled then
-        local grp = (mq.TLO.Group() or 0) > 0
+        local grp = group_size() > 0
         local self_only = (tt:lower() == 'self')
         if grp and not self_only then
           if buff.check_group(st, en, en.cast_name, en.check_name, rng) == false then
