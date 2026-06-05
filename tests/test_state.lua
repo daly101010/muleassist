@@ -56,7 +56,7 @@ function t.run()
   assert(st.pull.chain_hp == 90, 'ChainPullHP defaults 90')
   assert(st.pull.arc_width == 0, 'PullArcWidth defaults 0')
   assert(st.pull.use_calm == false, 'UseCalm defaults false')
-  assert(st.pull.grab_dead == false, 'GrabDeadGroupMembers defaults false')
+  assert(st.pull.grab_dead == true, 'GrabDeadGroupMembers from fixture (1)')
   assert(st.pull.move_use == 'nav', 'pull move_use defaults nav')
   assert(st.pull.dragging == 0, 'pull dragging starts 0')
 
