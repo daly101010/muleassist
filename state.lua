@@ -137,10 +137,25 @@ function state.new(cfg)
     namedsfirst = cfg:bool('Pull', 'PullNamedsFirst', false),
     level_raw   = cfg:get('Pull', 'PullLevel', '0|0'),
     melee_dist  = cfg:num('Melee', 'MeleeDistance', 25),
+    -- 5b-2 features
+    chain       = cfg:num('Pull', 'ChainPull', 0),
+    chain_hp    = cfg:num('Pull', 'ChainPullHP', 90),
+    chain_pause = cfg:get('Pull', 'ChainPullPause', '0'),     -- "activeMin|pauseMin" or "0"
+    use_calm    = cfg:bool('Pull', 'UseCalm', false),
+    calm_with   = cfg:get('Pull', 'CalmWith', 'Harmony'),
+    calm_radius = cfg:num('Pull', 'CalmRadius', 50),
+    arc_width   = cfg:num('Pull', 'PullArcWidth', 0),
+    grab_dead   = cfg:bool('Pull', 'GrabDeadGroupMembers', false),
+    mobs_sec    = cfg:get('Pull', 'MobsToPullSecondary', nil),
     -- resolved by pull.setup
-    range = 15, range_type = 'Melee', pull_min = 1, pull_max = 200, mob_list = nil,
+    range = 15, range_type = 'Melee', pull_min = 1, pull_max = 200,
+    mob_list = nil, mob_list_sec = nil,
+    arc_lside = 0, arc_rside = 0,
+    move_use = 'nav', path_wp_count = 0,
     -- runtime
     state = 'idle', target_id = nil, abort_deadline = 0, wait_until = 0, attempts = 0,
+    chain_hold = false, chain_active_until = 0, chain_pause_until = 0,
+    dragging = 0,
   }
   -- Puller travels out to MaxRadius; don't let the camp leash abort it (macro @5583).
   if st.pull.max_radius + 1 > st.camp.exceed then st.camp.exceed = st.pull.max_radius + 1 end
