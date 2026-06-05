@@ -112,4 +112,23 @@ function serialize.buff_to_string(e)
   return out
 end
 
+-- Heal entry: name|pct|tag  (pct = args[2], tag = args[3]). cond stored separately.
+function serialize.parse_heal(raw, cond)
+  raw = raw or ''
+  local f = pipe_split(raw)
+  return {
+    name = trim(f[1] or ''),
+    pct  = tonumber(trim(f[2] or '')) or 0,
+    tag  = trim(f[3] or ''),
+    cond = cond,
+    raw  = raw,
+  }
+end
+
+function serialize.heal_to_string(e)
+  local fields = { e.name or '', tostring(e.pct or 0), e.tag or '' }
+  while #fields > 1 and fields[#fields] == '' do fields[#fields] = nil end
+  return table.concat(fields, '|')
+end
+
 return serialize

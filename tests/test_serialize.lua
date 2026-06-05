@@ -56,6 +56,15 @@ function t.run()
   eq(e.prefix, 'summoned'); eq(e.name, 'Modulating Rod')
   eq(S.buff_to_string(e), 'summoned:Modulating Rod|Me', 'summoned prefix roundtrip')
 
+  -- heal: name|pct|tag
+  local h = S.parse_heal('Greater Healing|85|MA', '${Group.Injured[80]}')
+  eq(h.name, 'Greater Healing', 'heal name'); eq(h.pct, 85, 'heal pct'); eq(h.tag, 'MA', 'heal tag')
+  eq(h.cond, '${Group.Injured[80]}', 'heal cond')
+  eq(S.heal_to_string(h), 'Greater Healing|85|MA', 'heal roundtrip')
+
+  local h2 = S.parse_heal('Superior Healing|70', nil)
+  eq(h2.tag, '', 'heal no tag'); eq(S.heal_to_string(h2), 'Superior Healing|70', 'heal no-tag roundtrip')
+
   print('test_serialize: PASS')
   return true
 end
