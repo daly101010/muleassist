@@ -68,6 +68,19 @@ local function main(...)
   mq.bind('/macamphere', function() st.move.return_to_camp = true; move.set_camp(st) end)
   mq.bind('/mareload', function() st.pending_reapply = true end)
 
+  local ui_mod = nil
+  mq.bind('/maui', function()
+    if not ui_mod then
+      _G.MULEASSIST_EMBED = true
+      local ok, mod = pcall(require, 'muleassist.ui.init')
+      if not ok then Write.Error('MAUI load failed: %s', tostring(mod)); return end
+      ui_mod = mod
+      ui_mod.mount{ window = 'MuleAssist', on_apply = function() st.pending_reapply = true end }
+      return                       -- mount() opens the window
+    end
+    ui_mod.toggle()
+  end)
+
   while st.running do
     mq.doevents()
     if st.pending_reapply then
