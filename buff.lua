@@ -23,14 +23,6 @@ local function mqbool(v)
   return false  -- nil/unknown -> treat as "no" (don't stack / not ready), the safe default
 end
 
--- Temporary diagnostics for the buff stacking issue. Toggle with /lua ... or buff.debug.
-buff.debug = true
-local function dbg(fmt, ...)
-  if buff.debug then Write.Info('[buffdbg] ' .. fmt, ...) end
-end
--- Show a TLO result's value AND lua type, e.g. "FALSE(string)" or "true(boolean)".
-local function vt(v) return tostring(v) .. '(' .. type(v) .. ')' end
-
 -- Is this buff castable RIGHT NOW (off cooldown)? If not, the buff loop should skip it this
 -- pass rather than entering cast.cast and waiting for the gem/AA to refresh. Un-memmed spells
 -- pass (Phase 2c will mem them); a memmed spell must be gem-ready; AAs/items use their timers.
@@ -71,7 +63,7 @@ end
 local function peer_buff_decision(st, peer, spell)
   -- Use DanNet whenever the member is a reachable peer -- independent of MuleAssist's own
   -- DanNetOn toggle (that gates other features; stacking accuracy should always use it).
-  if not dnet_is_peer(peer) then dbg('dnet: %q not a peer (peers=%s)', peer, tostring(mq.TLO.DanNet.Peers())); return nil end
+  if not dnet_is_peer(peer) then return nil end
   local dur, ok = dnet_raw(peer, 'Me.Buff[' .. spell .. '].Duration.TotalSeconds', 1000)
   if not ok then return nil end
   if dur and tonumber(dur) and tonumber(dur) > 30 then return 'skip' end  -- still buffed
@@ -169,9 +161,7 @@ function buff.check_group(st, en, spell_to_cast, buff_sub, spell_range)
   local sb = silver(buff_sub)
   local me_id = mq.TLO.Me.ID()
   -- Don't enter the cast path for a buff that's on cooldown -- skip it this pass.
-  if not buff_ready(spell_to_cast, en.bufftype) then
-    dbg('%s not ready (cooldown/AA) -> skip entry', spell_to_cast); return true
-  end
+  if not buff_ready(spell_to_cast, en.bufftype) then return true end
   local list = {}
 
   local gn = group_size()
@@ -185,40 +175,32 @@ function buff.check_group(st, en, spell_to_cast, buff_sub, spell_range)
     local nm = gm.CleanName() or ('m' .. j)
     repeat
       if not id then break end
-      if (mq.TLO.Spawn(id).Distance() or 9999) >= spell_range then dbg('p1 %s/%s skip: out of range', sb, nm); break end
+      if (mq.TLO.Spawn(id).Distance() or 9999) >= spell_range then break end
       if (not ready(st, en.index, j))
-         and (mq.TLO.Spawn(id).CachedBuff(sb).Duration.TotalSeconds() or 0) > 30 then dbg('p1 %s/%s skip: timer+cached>30', sb, nm); break end
-      if st.buff.cond_on and en.cond and en.cond ~= '' and not cond.eval(en.cond) then dbg('p1 %s/%s skip: cond false', sb, nm); break end
-      if en.tag == 'Me' and id ~= me_id then dbg('p1 %s/%s skip: Me-tag, not self (id=%s me=%s)', sb, nm, tostring(id), tostring(me_id)); break end
+         and (mq.TLO.Spawn(id).CachedBuff(sb).Duration.TotalSeconds() or 0) > 30 then break end
+      if st.buff.cond_on and en.cond and en.cond ~= '' and not cond.eval(en.cond) then break end
+      if en.tag == 'Me' and id ~= me_id then break end
       local short = gm.Class.ShortName() or ''
-      if not class_ok(en, short) then dbg('p1 %s/%s skip: class/archetype', sb, nm); break end
-      if (mq.TLO.Me.CurrentMana() or 0) < (mq.TLO.Spell(spell_to_cast).Mana() or 0) then dbg('p1 %s/%s skip: low mana', sb, nm); break end
+      if not class_ok(en, short) then break end
+      if (mq.TLO.Me.CurrentMana() or 0) < (mq.TLO.Spell(spell_to_cast).Mana() or 0) then break end
       if en.tag == '!MA' and id == st.main_assist_id then break end
       if en.tag == '!ME' and id == me_id then break end
 
       if id == me_id then
-        if mq.TLO.Me.Buff(sb).ID() or mq.TLO.Me.Song(sb).ID() then dbg('p1 %s/ME skip: already on me', sb); break end
-        local raw = mq.TLO.Spell(sb).Stacks()
-        dbg('p1 %s/ME Stacks=%s -> %s', sb, vt(raw), tostring(mqbool(raw)))
-        if not mqbool(raw) then break end
+        if mq.TLO.Me.Buff(sb).ID() or mq.TLO.Me.Song(sb).ID() then break end
+        if not mqbool(mq.TLO.Spell(sb).Stacks()) then break end
       else
+        -- Authoritative stacking via the peer's own buff list (DanNet); fall back to the
+        -- partial local view only when the member isn't a reachable peer.
         local decision = peer_buff_decision(st, nm, sb)
         if decision ~= nil then
-          dbg('p1 %s/%s DanNet decision=%s', sb, nm, decision)
           if decision == 'skip' then break end
-          -- 'cast' -> falls through to add to list
         else
-          -- Fallback: no DanNet peer answer; use the (partial) local view.
           cache_buffs(id)
-          local cd = mq.TLO.Spawn(id).CachedBuff(sb).Duration.TotalSeconds() or 0
-          if cd > 30 then dbg('p1 %s/%s skip: cached dur %s>30', sb, nm, tostring(cd)); break end
-          local raw = mq.TLO.Spell(sb).StacksSpawn(id)()
-          dbg('p1 %s/%s StacksSpawn=%s -> %s (cachedCnt=%s, no dnet)', sb, nm, vt(raw),
-              tostring(mqbool(raw)), tostring(mq.TLO.Spawn(id).CachedBuffCount()))
-          if not mqbool(raw) then break end
+          if (mq.TLO.Spawn(id).CachedBuff(sb).Duration.TotalSeconds() or 0) > 30 then break end
+          if not mqbool(mq.TLO.Spell(sb).StacksSpawn(id)()) then break end
         end
       end
-      dbg('p1 %s/%s ADDED to cast list', sb, nm)
       list[#list + 1] = j
     until true
   end
@@ -237,18 +219,9 @@ function buff.check_group(st, en, spell_to_cast, buff_sub, spell_range)
         mq.delay(3000, function() return mq.TLO.Target.BuffsPopulated() end)
         mq.delay(3000, function() return (mq.TLO.Target.CachedBuffCount() or -1) ~= -1 end)
       end
-      -- Authoritative stacking check now that the member is targeted and their buffs are
-      -- populated. Pass-1 StacksSpawn is optimistic before the target's buffs are cached
-      -- (returns true), so a buff blocked by a DIFFERENT buff (e.g. the cleric's) would
-      -- otherwise get memmed+cast here. StacksTarget reads the live target's buffs.
       -- Stacking authority is pass-1 (DanNet peer query for grouped PCs). Here we only confirm
       -- we successfully targeted them and they don't already show the buff locally.
-      local tgtOk = mq.TLO.Target.ID() == id
-      local hasBuff = mq.TLO.Target.Buff(sb).ID()
-      dbg('p2 %s/%s targetOk=%s hasBuff=%s', spell_to_cast, (gm.CleanName() or ('m'..j)),
-          tostring(tgtOk), tostring(hasBuff))
-      if tgtOk and not hasBuff then
-        dbg('p2 %s -> CASTING on %s', spell_to_cast, (gm.CleanName() or ('m'..j)))
+      if mq.TLO.Target.ID() == id and not mq.TLO.Target.Buff(sb).ID() then
         mq.delay(3000, function() return not mq.TLO.Me.SpellInCooldown() end)
         if en.mgb and mq.TLO.Me.AltAbilityReady('Mass Group Buff')() then
           mq.cmd('/alt act 35'); mq.delay(100)
@@ -280,13 +253,10 @@ function buff.check_ma(st, en, spell_range)
   -- Authoritative stacking via the MA's own buff list when it's a DanNet peer.
   local decision = peer_buff_decision(st, ma, sb)
   if decision ~= nil then
-    dbg('ma %s DanNet decision=%s', sb, decision)
     if decision == 'skip' then return end
   else
     cache_buffs(mat_id)
-    local raw = mq.TLO.Spell(sb).StacksSpawn(mat_id)()
-    dbg('ma %s StacksSpawn=%s -> %s (no dnet)', sb, vt(raw), tostring(mqbool(raw)))
-    if not mqbool(raw) then return end
+    if not mqbool(mq.TLO.Spell(sb).StacksSpawn(mat_id)()) then return end
     if (mq.TLO.Spawn(mat_id).CachedBuff(sb).Duration() or 0) > 1000 then return end
   end
   if not ready(st, en.index, 7) then return end
@@ -302,14 +272,11 @@ end
 ----------------------------------------------------------------------
 function buff.check_self(st, en)
   local sb = silver(en.check_name)
-  if not buff_ready(en.check_name, en.bufftype) then dbg('self %s not ready -> skip', sb); return end
-  if mq.TLO.Me.Buff(sb).ID() or mq.TLO.Me.Song(sb).ID() then dbg('self %s skip: already on me', sb); return end
-  local raw = mq.TLO.Spell(sb).Stacks()
-  dbg('self %s Stacks=%s -> %s', sb, vt(raw), tostring(mqbool(raw)))
-  if not mqbool(raw) then return end
+  if not buff_ready(en.check_name, en.bufftype) then return end
+  if mq.TLO.Me.Buff(sb).ID() or mq.TLO.Me.Song(sb).ID() then return end
+  if not mqbool(mq.TLO.Spell(sb).Stacks()) then return end
   if st.buff.cond_on and en.cond and en.cond ~= '' and not cond.eval(en.cond) then return end
   if not ready(st, en.index, 0) then return end
-  dbg('self %s -> CASTING on me', sb)
   if en.mgb and mq.TLO.Me.AltAbilityReady('Tranquil Blessing')() then
     mq.cmd('/alt act 992'); mq.delay(100)
   end
@@ -506,7 +473,6 @@ local function oog_try(st, en, name, id)
   if st.buff.cond_on and en.cond and en.cond ~= '' and not cond.eval(en.cond) then return false end
   if not cast.will_it_stick(name, id) then return false end
   if not oog_ready(st, id) then return false end
-  dbg('oog %s -> CASTING on %s', name, sp.CleanName() or tostring(id))
   if cast.cast(name, 'OOGBuffs-nomem', id) == 'CAST_SUCCESS' then
     oog_arm(st, id, name)
     Write.Info('OOG buffed %s on %s', name, sp.CleanName() or tostring(id))
@@ -624,9 +590,6 @@ function buff.tick(st)
   if in_combat and not st.flags.buff_mode then return end
   if os.clock() < (st.buff.read_deadline or 0) then return end
 
-  dbg('tick RUN (CheckBuffsTimer=%s; was throttled until %.1f, now %.1f)',
-      tostring(st.buff.check_secs), st.buff.read_deadline or 0, os.clock())
-
   for _, en in ipairs(st.buff.entries) do
     -- per-iteration combat re-check (macro re-runs GetHostilesOnXTarget each pass).
     if (st.combat.aggro_target_id ~= nil or mq.TLO.Me.CombatState() == 'COMBAT')
@@ -651,18 +614,13 @@ function buff.tick(st)
       local tt  = buff._target_type(en.check_name)
       local handled = false
 
-      dbg('dispatch %s tag=%q bufftype=%s tt=%q grp=%s', en.cast_name, en.tag, tostring(en.bufftype),
-          tt, tostring(group_size() > 0))
-
       if en.tag == 'MA' or en.tag == 'DualMA' then
-        dbg('-> check_ma %s', en.cast_name)
         buff.check_ma(st, en, rng); handled = true
       end
 
       if not handled then
         local grp = group_size() > 0
         local self_only = (tt:lower() == 'self')
-        dbg('-> %s %s', (grp and not self_only) and 'check_group' or 'check_self', en.cast_name)
         if grp and not self_only then
           if buff.check_group(st, en, en.cast_name, en.check_name, rng) == false then
             break  -- hostiles abort
