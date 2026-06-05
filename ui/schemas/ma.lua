@@ -253,10 +253,6 @@ local schema = {
                 Type='SWITCH',
                 Tooltip='0=Off/1=On - Toggles Auto fire on/off. Ranged item and ammo must be equipped.',
             },
-            UseMQ2Melee={
-                Type='SWITCH',
-                Tooltip='0=Off/1=On - Toggles all MQ2Melee functions, including holy/downshits, and when off, lets muleassist completely control your Melee character.',
-            },
             Autohide={ -- rogue only
                 Type='SWITCH',
                 Tooltip='0=Off/1=On - Toggles auto Sneak Hide for Rogues. Rogue will hide sneak after every fight',

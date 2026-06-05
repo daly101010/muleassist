@@ -39,7 +39,6 @@ function state.new(cfg)
     melee_dist    = cfg:num('Melee', 'MeleeDistance', 25),
     stick_how     = cfg:get('Melee', 'StickHow', '!frontangle 12'),
     face_on       = cfg:bool('Melee', 'FaceMobOn', true),
-    use_mq2melee  = cfg:bool('Melee', 'UseMQ2Melee', false),
     dps_on        = cfg:bool('DPS', 'DPSOn', false),
     dps_interval  = cfg:num('DPS', 'DPSInterval', 1),
     dps_cond_on   = cfg:bool('General', 'ConditionsOn', true) and cfg:bool('DPS', 'DPSCOn', true),
