@@ -6,6 +6,7 @@ local mq    = require('mq')
 local Write = require('muleassist.Write')
 local cast  = require('muleassist.cast')
 local cond  = require('muleassist.cond')
+local serialize = require('muleassist.serialize')
 local buff  = {}
 
 local CASTER = { CLR=1,DRU=1,SHM=1,BST=1,ENC=1,MAG=1,NEC=1,PAL=1,SHD=1,RNG=1,WIZ=1 }
@@ -51,60 +52,11 @@ function buff.setup(st)
   local out = {}
   for _, e in ipairs(st.lists.buffs) do
     local raw_name = e.args[1] or e.spell or ''
-    local tag      = e.args[2] or ''
-    local part3    = e.args[3] or ''
-    local part4    = e.args[4] or ''
-    local part5    = e.args[5] or ''
     if raw_name ~= '' and raw_name:lower() ~= 'null' then
-      local cast_name  = raw_name:gsub('^item:', ''):gsub('^summoned:', '')
-
-      -- Dual + 4thPart subtype rewrite (CheckBuffs @6744-6758); class -> list in part5.
-      if tag == 'Dual' then
-        if     part4 == 'MA'     then tag = 'DualMA'
-        elseif part4 == 'melee'  then tag = 'DualMelee'
-        elseif part4 == 'caster' then tag = 'DualCaster'
-        elseif part4 == 'class'  then tag = 'DualClass'
-        elseif part4 == 'mgb'    then tag = 'DualMgb' end
-      elseif tag == 'class' then
-        part5 = part3
-      end
-
-      local is_dual    = tag:find('Dual') ~= nil
-      local check_name = (is_dual and part3 ~= '') and part3 or cast_name
-
-      -- archetype/class filter, derived from tag (incl. Dual variants).
-      local archetype, class_list
-      local tl = tag:lower()
-      if tl:find('caster') then archetype = 'caster'
-      elseif tl:find('melee') then archetype = 'melee'
-      elseif tl == 'class' or tl == 'dualclass' then archetype = 'class'; class_list = part5 end
-
-      -- OOG suffix: everything after the first ':' is a comma list of tokens
-      -- (PC name / xtargetN / raid / fellowship / rangeN). Pipe fields are unaffected.
-      local oog
-      local colon = e.raw:find(':', 1, true)
-      if colon then
-        oog = {}
-        for tok in (e.raw:sub(colon + 1) .. ','):gmatch('([^,]*),') do
-          tok = tok:gsub('^%s+', ''):gsub('%s+$', '')
-          if tok ~= '' then oog[#oog + 1] = tok end
-        end
-        if #oog == 0 then oog = nil end
-      end
-
-      out[#out + 1] = {
-        index      = e.index,
-        cast_name  = cast_name,
-        check_name = check_name,
-        tag        = tag,
-        part3 = part3, part4 = part4, part5 = part5,
-        cond       = e.cond,
-        is_dual    = is_dual,
-        mgb        = tl:find('mgb') ~= nil,
-        archetype  = archetype,
-        class_list = class_list,
-        oog        = oog,
-      }
+      local entry = serialize.parse_buff(e.raw, e.cond)
+      entry.index     = e.index
+      entry.cast_name = entry.name   -- buff.lua casts by cast_name
+      out[#out + 1] = entry
     end
   end
   st.buff.entries = out
@@ -484,33 +436,43 @@ function buff.oog_sweep(st, en, name, kind, brange)
   end
 end
 
--- CheckBuffs :OOG @7442: dispatch the entry's OOG token list.
+-- CheckBuffs :OOG @7442: dispatch the entry's structured OOG targets.
 function buff.check_oog(st, en, srange)
-  if not en.oog then return end
+  local oog = en.oog
+  if not oog then return end
+  if st.combat.chasing and not st.buff.while_chasing then return end
   local name = en.check_name
-  for _, tok in ipairs(en.oog) do
-    if st.combat.chasing and not st.buff.while_chasing then return end
-    if tok == 'raid' and (tonumber(mq.TLO.Raid.Members()) or 0) > 0 then
-      buff.oog_sweep(st, en, name, 'raid', 0)
-    elseif tok == 'fellowship' and (tonumber(mq.TLO.Me.Fellowship.Members()) or 0) > 0 then
-      buff.oog_sweep(st, en, name, 'fellowship', 0)
-    elseif tok:sub(1, 5) == 'range' then
-      if st.flags.buff_mode then
-        buff.oog_sweep(st, en, name, 'range', tonumber(tok:sub(6)) or 100)
-      end
-    else
-      local id
-      if tok:sub(1, 7) == 'xtarget' then
-        id = mq.TLO.Me.XTarget(tonumber(tok:sub(8)) or 0).ID()
-      else
-        id = mq.TLO.Spawn('pc =' .. tok).ID()
-      end
-      if id and id ~= mq.TLO.Me.ID() and not (mq.TLO.Group.Member(mq.TLO.Spawn(id).CleanName()).ID()) then
-        if (mq.TLO.Spawn(id).Distance() or 9999) <= srange then oog_try(st, en, name, id) end
-      end
-    end
-    if (st.combat.aggro_target_id ~= nil or mq.TLO.Me.CombatState() == 'COMBAT')
-       and not st.flags.buff_mode then return end
+  local function combat_abort()
+    return (st.combat.aggro_target_id ~= nil or mq.TLO.Me.CombatState() == 'COMBAT')
+           and not st.flags.buff_mode
+  end
+  local function eligible(id)
+    return id and id ~= mq.TLO.Me.ID()
+       and not mq.TLO.Group.Member(mq.TLO.Spawn(id).CleanName()).ID()
+       and (mq.TLO.Spawn(id).Distance() or 9999) <= srange
+  end
+
+  if oog.raid and (tonumber(mq.TLO.Raid.Members()) or 0) > 0 then
+    buff.oog_sweep(st, en, name, 'raid', 0)
+  end
+  if combat_abort() then return end
+  if oog.fellowship and (tonumber(mq.TLO.Me.Fellowship.Members()) or 0) > 0 then
+    buff.oog_sweep(st, en, name, 'fellowship', 0)
+  end
+  if combat_abort() then return end
+  if oog.range and st.flags.buff_mode then
+    buff.oog_sweep(st, en, name, 'range', oog.range)
+  end
+  if combat_abort() then return end
+  for _, slot in ipairs(oog.xtargets or {}) do
+    local id = mq.TLO.Me.XTarget(slot).ID()
+    if eligible(id) then oog_try(st, en, name, id) end
+    if combat_abort() then return end
+  end
+  for _, nm in ipairs(oog.names or {}) do
+    local id = mq.TLO.Spawn('pc =' .. nm).ID()
+    if eligible(id) then oog_try(st, en, name, id) end
+    if combat_abort() then return end
   end
 end
 
