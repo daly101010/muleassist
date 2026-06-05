@@ -73,9 +73,11 @@ local function main(...)
     if not ui_mod then
       _G.MULEASSIST_EMBED = true
       local ok, mod = pcall(require, 'muleassist.ui.init')
+      _G.MULEASSIST_EMBED = nil    -- load-time guard already ran; don't leak to other scripts
       if not ok then Write.Error('MAUI load failed: %s', tostring(mod)); return end
       ui_mod = mod
-      ui_mod.mount{ window = 'MuleAssist', on_apply = function() st.pending_reapply = true end }
+      ui_mod.mount{ window = 'MuleAssist', ini_path = path,
+                    on_apply = function() st.pending_reapply = true end }
       return                       -- mount() opens the window
     end
     ui_mod.toggle()

@@ -1604,10 +1604,18 @@ local function build_trees()
 end
 
 -- Embed entry: host the panel inside another script (the bot). No keep-alive loop.
+-- opts.ini_path (the bot's st.cfg.path) locks the editor to the exact file the bot
+-- reloads, so live edits can't diverge to a different INI (e.g. a level-named variant).
 function M.mount(opts)
     apply_opts = opts or {}
-    load_bot_ini()
-    cfg_snapshot = diff.snapshot(globals.Config)
+    if apply_opts.ini_path and apply_opts.ini_path ~= '' then
+        globals.INIFile = apply_opts.ini_path:match('[^/\\]+$')   -- basename Save() writes
+        globals.Config = utils.FileExists(apply_opts.ini_path)
+            and LIP.load(apply_opts.ini_path) or {}
+    else
+        load_bot_ini()
+    end
+    cfg_snapshot = diff.snapshot(globals.Config or {})
     open = true
     mq.imgui.init(apply_opts.window or 'MuleAssist', function()
         build_trees()
