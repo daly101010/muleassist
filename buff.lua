@@ -69,7 +69,8 @@ end
 --   'cast'  -> missing/expiring AND it will stack
 --   nil     -> not a DanNet peer / no answer -> caller uses local checks
 local function peer_buff_decision(st, peer, spell)
-  if not st.flags.dannet_on then dbg('dnet off'); return nil end
+  -- Use DanNet whenever the member is a reachable peer -- independent of MuleAssist's own
+  -- DanNetOn toggle (that gates other features; stacking accuracy should always use it).
   if not dnet_is_peer(peer) then dbg('dnet: %q not a peer (peers=%s)', peer, tostring(mq.TLO.DanNet.Peers())); return nil end
   local dur, ok = dnet_raw(peer, 'Me.Buff[' .. spell .. '].Duration.TotalSeconds', 1000)
   if not ok then return nil end
