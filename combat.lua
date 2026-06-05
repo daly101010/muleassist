@@ -219,10 +219,17 @@ local function can_start_combat(st)
   if (sp.PctHPs() or 100) > c.assist_at then return false end
   local dist = sp.Distance() or 9999
   if dist < c.melee_dist then return true end
-  local ma = mq.TLO.Spawn('=' .. (st.main_assist or ''))
-  if ma.ID() then
+  -- Camp-distance gate: anchor on SELF when tanking (we are the camp center), else on the MA.
+  local ay, ax
+  if is_tank(st) then
+    ay, ax = mq.TLO.Me.Y(), mq.TLO.Me.X()
+  else
+    local ma = mq.TLO.Spawn('=' .. (st.main_assist or ''))
+    if ma.ID() then ay, ax = ma.Y(), ma.X() end
+  end
+  if ay then
     local d = mq.TLO.Math.Distance(string.format('%f,%f:%f,%f',
-      sp.Y() or 0, sp.X() or 0, ma.Y() or 0, ma.X() or 0))()
+      sp.Y() or 0, sp.X() or 0, ay, ax))()
     if (d or 9999) <= (st.camp.radius or 60) then return true end
   end
   if (sp.Speed() or 0) == 0 then
