@@ -149,7 +149,12 @@ function buff.check_group(st, en, spell_to_cast, buff_sub, spell_range)
         mq.delay(3000, function() return mq.TLO.Target.BuffsPopulated() end)
         mq.delay(3000, function() return (mq.TLO.Target.CachedBuffCount() or -1) ~= -1 end)
       end
-      if not mq.TLO.Target.Buff(sb).ID() then
+      -- Authoritative stacking check now that the member is targeted and their buffs are
+      -- populated. Pass-1 StacksSpawn is optimistic before the target's buffs are cached
+      -- (returns true), so a buff blocked by a DIFFERENT buff (e.g. the cleric's) would
+      -- otherwise get memmed+cast here. StacksTarget reads the live target's buffs.
+      if mq.TLO.Target.ID() == id and not mq.TLO.Target.Buff(sb).ID()
+         and mq.TLO.Spell(spell_to_cast).StacksTarget() then
         mq.delay(3000, function() return not mq.TLO.Me.SpellInCooldown() end)
         if en.mgb and mq.TLO.Me.AltAbilityReady('Mass Group Buff')() then
           mq.cmd('/alt act 35'); mq.delay(100)
@@ -179,6 +184,8 @@ function buff.check_ma(st, en, spell_range)
   if st.buff.cond_on and en.cond and en.cond ~= '' and not cond.eval(en.cond) then return end
   cache_buffs(mat_id)
   if not mq.TLO.Spell(sb).StacksSpawn(mat_id)() then return end
+  -- Authoritative stacking check against the now-targeted MA (StacksSpawn can be optimistic).
+  if mq.TLO.Target.ID() == mat_id and not mq.TLO.Spell(en.check_name).StacksTarget() then return end
   if (mq.TLO.Spawn(mat_id).CachedBuff(sb).Duration() or 0) > 1000 then return end
   if not ready(st, en.index, 7) then return end
   if cast.cast(en.check_name, 'Buffs-nomem', mat_id) == 'CAST_SUCCESS' then
