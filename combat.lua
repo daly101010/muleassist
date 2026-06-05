@@ -20,10 +20,6 @@ local function mqbool(v)
   return false
 end
 
--- Temporary diagnostics (toggle off once combat is verified).
-combat.debug = true
-local function dbg(fmt, ...) if combat.debug then Write.Info('[cbtdbg] ' .. fmt, ...) end end
-
 -- Ask a DanNet peer to evaluate an MQ expression against its own state. Returns the string
 -- result, or nil if not a peer / no answer.
 local function dnet_query(peer, query, timeout)
@@ -125,28 +121,23 @@ end
 local function assist(st)
   local c = st.combat
   local ma = st.main_assist
-  if not ma or ma == '' or ma == mq.TLO.Me.CleanName() then dbg('assist bail: no MA (%s)', tostring(ma)); return end
-  if not (c.mob_count > 0 or c.aggro_target_id) then dbg('assist bail: no mob/aggro'); return end
+  if not ma or ma == '' or ma == mq.TLO.Me.CleanName() then return end
+  if not (c.mob_count > 0 or c.aggro_target_id) then return end
   local maSpawn = mq.TLO.Spawn('=' .. ma)
-  if not maSpawn.ID() or (maSpawn.Distance() or 9999) >= 200 then
-    dbg('assist bail: MA spawn id=%s dist=%s', tostring(maSpawn.ID()), tostring(maSpawn.Distance())); return
-  end
+  if not maSpawn.ID() or (maSpawn.Distance() or 9999) >= 200 then return end
 
   -- Resolve the MA's target. GroupAssistTarget needs the EQ group Main-Assist role; when it's
   -- 0, ask the MA peer directly over DanNet (authoritative, no group-role dependency). Final
   -- fallback: the MA spawn's AssistName (macro AssistOutside path).
   local tmp = mq.TLO.Me.GroupAssistTarget.ID()
-  local src = 'group'
   if not tmp or tmp == 0 then
     local r = dnet_query(ma, 'Target.ID', 500)
-    if r then tmp = tonumber(r); src = 'dnet' end
+    if r then tmp = tonumber(r) end
   end
-  if (not tmp or tmp == 0) then
+  if not tmp or tmp == 0 then
     local an = maSpawn.AssistName()
-    if an and an ~= '' then tmp = mq.TLO.Spawn(an).ID(); src = 'assistname' end
+    if an and an ~= '' then tmp = mq.TLO.Spawn(an).ID() end
   end
-  dbg('assist: src=%s GroupAssistTarget=%s tmp=%s', src,
-      tostring(mq.TLO.Me.GroupAssistTarget.ID()), tostring(tmp))
   if not tmp or tmp == 0 then return end
 
   local sp = mq.TLO.Spawn(tmp)
@@ -321,9 +312,6 @@ function combat.tick(st)
   if not (c.dps_on or c.melee_on) then refresh_state(st); return end
 
   refresh_state(st)
-  dbg('tick: MA=%s aggro=%s mob_count=%d dps_on=%s melee_on=%s',
-      tostring(st.main_assist), tostring(c.aggro_target_id), c.mob_count,
-      tostring(c.dps_on), tostring(c.melee_on))
 
   if not c.aggro_target_id and c.mob_count == 0 then
     if c.combat_start then combat.reset(st) end
@@ -332,16 +320,11 @@ function combat.tick(st)
 
   assist(st)
   local tid = c.my_target_id
-  dbg('after assist: my_target_id=%s (%s)', tostring(tid),
-      tid and (mq.TLO.Spawn(tid).CleanName() or '?') or 'none')
   if not tid then return end
   local sp = mq.TLO.Spawn(tid)
   if sp.Type() == 'Corpse' or not sp.ID() then combat.reset(st); return end
 
-  local csc = can_start_combat(st)
-  dbg('can_start_combat=%s (tgtHP=%s assistAt=%d dist=%s meleeDist=%d)', tostring(csc),
-      tostring(sp.PctHPs()), c.assist_at, tostring(sp.Distance()), c.melee_dist)
-  if csc then
+  if can_start_combat(st) then
     c.combat_start = true
     engage(st)
     combat.rotation(st)
