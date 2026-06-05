@@ -29,9 +29,39 @@ function state.new(cfg)
   -- Optional callbacks wired by later phases (nil = skip): oh_shit, custom_func,
   -- write_debuffs, etc.
   st.hooks = {}
-  -- Combat globals filled in Phase 4 (aggro_target_id, my_target_id, combat_start,
-  -- pulled, ...). nil fields make heal.lua's combat branches no-op until then.
-  st.combat = {}
+  -- Combat state (Phase 4a). Runtime fields (aggro_target_id, my_target_id, combat_start,
+  -- pulled, chasing) are read defensively by heal/buff/rez; combat.tick populates them.
+  st.combat = {
+    -- config
+    role          = (cfg:get('General', 'Role', 'Assist') or 'Assist'),
+    assist_at     = cfg:num('Melee', 'AssistAt', 95),
+    melee_on      = cfg:bool('Melee', 'MeleeOn', false),
+    melee_dist    = cfg:num('Melee', 'MeleeDistance', 25),
+    stick_how     = cfg:get('Melee', 'StickHow', '!frontangle 12'),
+    face_on       = cfg:bool('Melee', 'FaceMobOn', true),
+    use_mq2melee  = cfg:bool('Melee', 'UseMQ2Melee', false),
+    dps_on        = cfg:bool('DPS', 'DPSOn', false),
+    dps_interval  = cfg:num('DPS', 'DPSInterval', 1),
+    dps_cond_on   = cfg:bool('General', 'ConditionsOn', true) and cfg:bool('DPS', 'DPSCOn', true),
+    assist_outside= cfg:bool('General', 'AssistOutside', false),
+    pet_assist_at = cfg:num('Pet', 'PetAssistAt', 95),
+    pet_combat_on = cfg:bool('Pet', 'PetCombatOn', false),
+    -- runtime
+    aggro_target_id = nil,
+    hostile_count   = 0,
+    mob_count       = 0,
+    my_target_id    = nil,
+    my_target_name  = nil,
+    combat_start    = nil,
+    attacking       = nil,
+    pulled          = nil,
+    chasing         = nil,
+    xtslot          = 1,
+    dps_timers      = {},   -- [slot_index][target_id] = os.clock() deadline
+    entries         = {},   -- categorized DPS list (combat.setup)
+    burn            = {},
+    burning         = false,
+  }
 
   st.heal = {
     mode         = cfg:num('Heals', 'HealsOn', 0),      -- 0 off,1 all,2 group-no-MA,3 MA+self

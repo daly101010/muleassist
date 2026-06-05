@@ -34,6 +34,11 @@ function t.run()
   assert(type(st.buff.entries) == 'table' and type(st.buff.timers) == 'table',
     'st.buff.entries/timers should be tables')
 
+  assert(type(st.combat) == 'table', 'st.combat missing')
+  assert(st.combat.assist_at == 95, 'default AssistAt 95')
+  assert(type(st.combat.dps_timers) == 'table' and type(st.combat.entries) == 'table',
+    'combat tables missing')
+
   print('test_state: PASS')
   return true
 end

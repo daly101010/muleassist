@@ -10,6 +10,7 @@ local mods = {
   'muleassist.tests.test_buff',
   'muleassist.tests.test_petbuff',
   'muleassist.tests.test_serialize',
+  'muleassist.tests.test_combat',
 }
 
 local ok_all = true

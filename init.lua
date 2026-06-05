@@ -9,6 +9,7 @@ local heal   = require('muleassist.heal')
 local rez    = require('muleassist.rez')
 local buff   = require('muleassist.buff')
 local petbuff = require('muleassist.petbuff')
+local combat = require('muleassist.combat')
 
 local function find_config_path(server, char)
   local cfgdir = mq.TLO.MacroQuest.Path('config')() or '.'
@@ -30,7 +31,7 @@ local function main(...)
   end
 
   local st = state.new(cfg)
-  if args[1] and args[1] ~= '' then st.role = args[1] end
+  if args[1] and args[1] ~= '' then st.role = args[1]; st.combat.role = args[1] end
   if args[2] and args[2] ~= '' then st.main_assist = args[2] end
 
   cast.gem_stuck_ability = cfg:get('General', 'GemStuckAbility', nil)
@@ -47,6 +48,7 @@ local function main(...)
   heal.setup(st)
   buff.setup(st)
   petbuff.setup(st)
+  combat.setup(st)
 
   Write.Info('MuleAssist-Lua loaded. Role=%s MA=%s AssistAt=%d',
     st.role, tostring(st.main_assist), cfg:num('Melee', 'AssistAt', 95))
@@ -54,9 +56,14 @@ local function main(...)
     #st.lists.dps, #st.lists.heals, #st.lists.buffs, #st.lists.burn)
 
   mq.bind('/maquit', function() st.running = false end)
+  mq.bind('/maburn', function() st.combat.burning = true end)
 
   while st.running do
     mq.doevents()
+    -- Keep MainAssistID fresh (macro @1607); heal MA-heals and combat 'MA'-target DPS need it.
+    st.main_assist_id = mq.TLO.Spawn('=' .. (st.main_assist or '')).ID() or 0
+    -- Refresh combat state early so heal/buff/rez gates (aggro_target_id) are current this tick.
+    combat.refresh(st)
     -- Macro main-loop order: state -> move -> heal -> rez -> buff -> DPS. Later
     -- phases insert their ticks around these. rez.check is its own loop slot
     -- (Sub Main @1561), independent of HealsOn, gated internally on AutoRezOn.
@@ -69,6 +76,9 @@ local function main(...)
     buff.tick(st)
     -- CheckPetBuffs (@1569): own slot, gated on PetBuffsOn + pet exists + 60s throttle.
     petbuff.tick(st)
+    -- CheckForCombat (@1576/Sub Main): assist + DPS/melee. Populates st.combat.* that the
+    -- heal/buff/rez combat gates read; internally gated on DPSOn/MeleeOn + combat state.
+    combat.tick(st)
     mq.delay(250)
   end
 
