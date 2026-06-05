@@ -12,6 +12,7 @@ local mods = {
   'muleassist.tests.test_serialize',
   'muleassist.tests.test_combat',
   'muleassist.tests.test_settings',
+  'muleassist.tests.test_diff',
 }
 
 local ok_all = true
