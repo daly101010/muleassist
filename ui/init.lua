@@ -13,6 +13,7 @@ local globals = require('muleassist.ui.globals')
 local utils = require('muleassist.ui.utils')
 local filedialog = require('muleassist.ui.lib.imguifiledialog')
 local cache = require('muleassist.ui.lib.cache')
+local serialize = require('muleassist.serialize')
 
 globals.CurrentSchema = 'ma'
 globals.Schema = require('muleassist.ui.schemas.'..globals.CurrentSchema)
@@ -509,8 +510,240 @@ local function DrawKeyAndInputText(keyText, label, value, helpText)
 end
 
 -- Draw the value and condition of the selected list item
+-- Buff tags presented in the structured editor (normalized form used by serialize/the bot).
+local BUFF_TAGS = { '', 'Me', 'MA', '!MA', '!ME', 'caster', 'Melee', 'class',
+  'Dual', 'DualMA', 'DualMelee', 'DualCaster', 'DualClass', 'DualMgb', 'mgb',
+  'Aura', 'Mana', 'Managroup', 'Endgroup', 'End', 'Summon', 'Once', 'Remove' }
+local BUFF_PREFIXES = { '(none)', 'item', 'command', 'summoned' }
+local HEAL_TAGS = { '', 'MA', 'Me', '!MA', 'pet', '!pet', 'Mob', 'Tap', 'xtar' }
+
+-- Live PC names for the OOG "add from nearby" picker: group + raid + nearby PCs.
+local function live_pc_names()
+  local seen, out = {}, {}
+  local me = mq.TLO.Me.CleanName()
+  local function add(n) if n and n ~= '' and n ~= me and not seen[n] then seen[n] = true; out[#out+1] = n end end
+  for i = 1, (tonumber(mq.TLO.Group()) or 0) do add(mq.TLO.Group.Member(i).CleanName()) end
+  for i = 1, (tonumber(mq.TLO.Raid.Members()) or 0) do add(mq.TLO.Raid.Member(i).CleanName()) end
+  local cnt = tonumber(mq.TLO.SpawnCount('pc radius 200')()) or 0
+  for i = 1, math.min(cnt, 50) do add(mq.TLO.NearestSpawn(i .. ',pc radius 200').CleanName()) end
+  return out
+end
+
+-- OOG builder: mutates `oog` ({names={},xtargets={},raid,fellowship,range}) in place.
+-- Returns the oog table (or nil if disabled).
+local function DrawOOGBuilder(idbase, oog)
+  local enabled = oog ~= nil
+  enabled = ImGui.Checkbox('Out-of-group targets##oog'..idbase, enabled)
+  if not enabled then return nil end
+  oog = oog or { names = {}, xtargets = {} }
+  oog.names = oog.names or {}
+  oog.xtargets = oog.xtargets or {}
+
+  oog.raid = ImGui.Checkbox('Raid##oog'..idbase, oog.raid or false)
+  ImGui.SameLine()
+  oog.fellowship = ImGui.Checkbox('Fellowship##oog'..idbase, oog.fellowship or false)
+
+  local hasRange = oog.range ~= nil
+  hasRange = ImGui.Checkbox('Range##oog'..idbase, hasRange)
+  if hasRange then
+    ImGui.SameLine(); ImGui.PushItemWidth(80)
+    oog.range = ImGui.InputInt('radius##oog'..idbase, oog.range or 100)
+    if oog.range < 1 then oog.range = 1 end
+    ImGui.PopItemWidth()
+  else
+    oog.range = nil
+  end
+
+  -- Named targets: one editable row each, with a remove button.
+  ImGui.Text('Characters:')
+  local removeIdx
+  for i, nm in ipairs(oog.names) do
+    ImGui.PushItemWidth(180)
+    oog.names[i] = ImGui.InputText('##oogname'..idbase..i, nm)
+    ImGui.PopItemWidth()
+    ImGui.SameLine()
+    if ImGui.SmallButton('x##oogdel'..idbase..i) then removeIdx = i end
+  end
+  if removeIdx then table.remove(oog.names, removeIdx) end
+  if ImGui.SmallButton('+ Add name##oogadd'..idbase) then oog.names[#oog.names+1] = '' end
+  ImGui.SameLine()
+  -- Live picker: choose a nearby/group/raid PC to append.
+  if ImGui.BeginCombo('##oogpick'..idbase, 'Add nearby...') then
+    for _, n in ipairs(live_pc_names()) do
+      if ImGui.Selectable(n..'##oogpick'..idbase) then oog.names[#oog.names+1] = n end
+    end
+    ImGui.EndCombo()
+  end
+  return oog
+end
+
+-- Structured editor for a Buffs entry. Replaces the raw Name|Options fields.
+local function DrawStructuredBuff(sectionName, valueKey, value)
+  local cfg = globals.Config[sectionName]
+  local raw = cfg[valueKey]
+  if raw == nil or raw == 'NULL' then raw = '' end
+  local idx = valueKey:match('(%d+)$') or ''
+  local condKey = sectionName .. 'Cond' .. idx
+  local condRaw = cfg[condKey]
+  if condRaw == 'NULL' then condRaw = nil end
+
+  local e = serialize.parse_buff(raw, condRaw)
+
+  ImGui.PushStyleColor(ImGuiCol.Text, 0, 1, 1, 1)
+  ImGui.Text(valueKey); ImGui.PopStyleColor()
+
+  -- Name + prefix
+  ImGui.PushItemWidth(120)
+  local prefIdx = 1
+  for i, p in ipairs(BUFF_PREFIXES) do if e.prefix == p then prefIdx = i end end
+  if ImGui.BeginCombo('##pref'..valueKey, BUFF_PREFIXES[prefIdx]) then
+    for i, p in ipairs(BUFF_PREFIXES) do
+      if ImGui.Selectable(p..'##pref'..valueKey, i == prefIdx) then
+        e.prefix = (p == '(none)') and nil or p
+      end
+    end
+    ImGui.EndCombo()
+  end
+  ImGui.PopItemWidth()
+  ImGui.SameLine()
+  ImGui.PushItemWidth(260)
+  e.name = ImGui.InputText('Name##name'..valueKey, e.name or '')
+  if e.name:find('|') then e.name = e.name:match('[^|]+') or e.name end
+  ImGui.PopItemWidth()
+
+  -- Tag
+  ImGui.PushItemWidth(160)
+  if ImGui.BeginCombo('Tag##tag'..valueKey, e.tag ~= '' and e.tag or '(plain)') then
+    for _, tg in ipairs(BUFF_TAGS) do
+      if ImGui.Selectable((tg ~= '' and tg or '(plain)')..'##tag'..valueKey, tg == e.tag) then
+        e.tag = tg
+      end
+    end
+    ImGui.EndCombo()
+  end
+  ImGui.PopItemWidth()
+  utils.HelpMarker(value['OptionsTooltip'] or '')
+
+  -- Tag-dependent fields with friendly labels.
+  local isDual = e.tag:sub(1,4) == 'Dual'
+  if isDual then
+    ImGui.PushItemWidth(260)
+    e.part3 = ImGui.InputText('Single-target form##p3'..valueKey, e.part3 or '')
+    ImGui.PopItemWidth()
+  end
+  if e.tag == 'class' then
+    ImGui.PushItemWidth(260)
+    e.part3 = ImGui.InputText('Classes (e.g. WAR,PAL)##p3'..valueKey, e.part3 or '')
+    ImGui.PopItemWidth()
+  elseif e.tag == 'DualClass' then
+    ImGui.PushItemWidth(260)
+    e.part5 = ImGui.InputText('Classes (e.g. WAR,PAL)##p5'..valueKey, e.part5 or '')
+    ImGui.PopItemWidth()
+  elseif e.tag == 'End' then
+    ImGui.PushItemWidth(100)
+    e.part3 = ImGui.InputText('Endurance %##p3'..valueKey, e.part3 or '')
+    e.part4 = ImGui.InputText('Min HP %##p4'..valueKey, e.part4 or '')
+    ImGui.PopItemWidth()
+  elseif e.tag == 'Summon' then
+    ImGui.PushItemWidth(200)
+    e.part3 = ImGui.InputText('Item to summon##p3'..valueKey, e.part3 or '')
+    e.part4 = ImGui.InputText('Keep count##p4'..valueKey, e.part4 or '')
+    ImGui.PopItemWidth()
+  elseif e.tag == 'Mana' or e.tag == 'Managroup' or e.tag == 'Endgroup' then
+    ImGui.PushItemWidth(100)
+    e.part3 = ImGui.InputText('Trigger %##p3'..valueKey, e.part3 or '')
+    if e.tag == 'Mana' then e.part4 = ImGui.InputText('Min HP %##p4'..valueKey, e.part4 or '') end
+    ImGui.PopItemWidth()
+  end
+
+  -- OOG builder
+  e.oog = DrawOOGBuilder(valueKey, e.oog)
+
+  -- Condition
+  if value['Conditions'] then
+    ImGui.PushItemWidth(320)
+    local c = ImGui.InputText('Condition##cond'..valueKey, e.cond or '')
+    ImGui.PopItemWidth()
+    e.cond = (c ~= '') and c or nil
+    utils.HelpMarker(value['CondTooltip'] or '')
+  end
+
+  -- Serialize back to the INI table.
+  if e.name and e.name ~= '' then
+    cfg[valueKey] = serialize.buff_to_string(e)
+  else
+    cfg[valueKey] = ''
+  end
+  cfg[condKey] = e.cond or 'NULL'
+end
+
+-- Structured editor for a Heals entry: name | pct | tag (+ condition).
+local function DrawStructuredHeal(sectionName, valueKey, value)
+  local cfg = globals.Config[sectionName]
+  local raw = cfg[valueKey]
+  if raw == nil or raw == 'NULL' then raw = '' end
+  local idx = valueKey:match('(%d+)$') or ''
+  local condKey = sectionName .. 'Cond' .. idx
+  local condRaw = cfg[condKey]
+  if condRaw == 'NULL' then condRaw = nil end
+
+  local e = serialize.parse_heal(raw, condRaw)
+
+  ImGui.PushStyleColor(ImGuiCol.Text, 0, 1, 1, 1)
+  ImGui.Text(valueKey); ImGui.PopStyleColor()
+
+  ImGui.PushItemWidth(260)
+  e.name = ImGui.InputText('Spell/Item/AA##name'..valueKey, e.name or '')
+  if e.name:find('|') then e.name = e.name:match('[^|]+') or e.name end
+  ImGui.PopItemWidth()
+  utils.HelpMarker(value['Tooltip'] or '')
+
+  ImGui.PushItemWidth(120)
+  e.pct = ImGui.InputInt('Cast at HP %##pct'..valueKey, e.pct or 0)
+  if e.pct < 0 then e.pct = 0 elseif e.pct > 100 then e.pct = 100 end
+  ImGui.PopItemWidth()
+
+  ImGui.PushItemWidth(160)
+  if ImGui.BeginCombo('Tag##tag'..valueKey, e.tag ~= '' and e.tag or '(any)') then
+    for _, tg in ipairs(HEAL_TAGS) do
+      if ImGui.Selectable((tg ~= '' and tg or '(any)')..'##tag'..valueKey, tg == e.tag) then
+        e.tag = tg
+      end
+    end
+    ImGui.EndCombo()
+  end
+  ImGui.PopItemWidth()
+  utils.HelpMarker(value['OptionsTooltip'] or '')
+
+  if value['Conditions'] then
+    ImGui.PushItemWidth(320)
+    local c = ImGui.InputText('Condition##cond'..valueKey, e.cond or '')
+    ImGui.PopItemWidth()
+    e.cond = (c ~= '') and c or nil
+    utils.HelpMarker(value['CondTooltip'] or '')
+  end
+
+  if e.name and e.name ~= '' then
+    cfg[valueKey] = serialize.heal_to_string(e)
+  else
+    cfg[valueKey] = ''
+  end
+  cfg[condKey] = e.cond or 'NULL'
+end
+
 local function DrawSelectedListItem(sectionName, key, value)
     local valueKey = key..selectedListItem[2]
+    if sectionName == 'Buffs' then
+        ImGui.Separator()
+        DrawStructuredBuff(sectionName, valueKey, value)
+        ImGui.Separator()
+        return
+    elseif sectionName == 'Heals' then
+        ImGui.Separator()
+        DrawStructuredHeal(sectionName, valueKey, value)
+        ImGui.Separator()
+        return
+    end
     -- make sure values not nil so imgui inputs don't barf
     if globals.Config[sectionName][valueKey] == nil then
         globals.Config[sectionName][valueKey] = 'NULL'
