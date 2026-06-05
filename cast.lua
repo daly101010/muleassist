@@ -169,10 +169,13 @@ function cast.cast(what, sent_from, target_id)
       return 'CAST_NO_RESULT'
     end
 
-    -- Short-recast path: mem into MiscGem, then fall through to the gem-ready wait + cast.
+    -- Short-recast path: mem into MiscGem, then wait for the gem to become CASTABLE before
+    -- falling through. A freshly-memmed gem carries a refresh timer, so SpellReady is false
+    -- for a few seconds; without this wait the cast loop fires into a not-ready gem, nothing
+    -- casts, and wait_cast still reports CAST_SUCCESS (CastWhat gemdelay @5124-5134).
     cast.remem_wait_short = what
     cast.mem_spell(what, cast.misc_gem, 0, sent_from)
-    mq.delay(15000, function() return (mq.TLO.Me.GemTimer(what)() or 0) ~= 0 end)
+    mq.delay(15000, function() return mq.TLO.Me.SpellReady(what)() end)
   end
 
   -- Gem-ready wait (lines 5301-5302).
