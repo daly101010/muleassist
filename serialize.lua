@@ -144,16 +144,17 @@ function serialize.parse_dps(raw, cond)
   local spell = trim(a[1] or '')
   local part2 = tonumber(trim(a[2] or '')) or 0
   local a3 = trim(a[3] or '')
-  local once = (a3:lower() == 'once')
+  local a3l = a3:lower()                 -- keyword/once lookup is case-insensitive
+  local once = (a3l == 'once')
   local target, if_tag, if_spell
-  if DPS_KEYWORDS[a3] then
-    if_tag   = a3
+  if DPS_KEYWORDS[a3l] then
+    if_tag   = a3l
     if_spell = trim(a[4] or '')
     target   = (trim(a[5] or '') ~= '' and trim(a[5])) or 'Mob'
   else
     target   = (once or a3 == '') and 'Mob' or a3
-    local a4 = trim(a[4] or '')
-    if_tag   = DPS_KEYWORDS[a4] and a4 or nil
+    local a4l = trim(a[4] or ''):lower()
+    if_tag   = DPS_KEYWORDS[a4l] and a4l or nil
     if_spell = if_tag and trim(a[5] or '') or nil
   end
   local persistent = part2 >= 101

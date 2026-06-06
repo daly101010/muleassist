@@ -92,7 +92,7 @@ function t.run()
 
   -- round-trip (semantic fields preserved)
   for _, raw in ipairs({ 'Ice Comet|95', 'Fierce Eye|100|Me', 'Malo|101|debuffall',
-                         'Spell|95|MA|if|Slow', 'Disc|95|once' }) do
+                         'Spell|95|MA|if|Slow', 'Disc|95|once', 'Cripple|95|notif|Cripple' }) do
     local e = S.parse_dps(raw, nil)
     local out = S.dps_to_string(e)
     local e2 = S.parse_dps(out, nil)
