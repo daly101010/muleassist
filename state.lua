@@ -141,7 +141,18 @@ function state.apply_config(st, cfg)
     gom       = cfg:list('gom'),
     ae        = cfg:list('ae'),
     cures     = cfg:list('cures'),
+    charm     = cfg:list('charm'),
   }
+
+  st.charm = st.charm or {}
+  local ch = st.charm
+  ch.on          = cfg:bool('Charm', 'CharmOn', false)  -- macro stores CharmOn in [Charm]
+  ch.stun_on     = cfg:bool('Charm', 'CharmStunOn', true)
+  ch.retash_on   = cfg:bool('Charm', 'CharmRetashOn', true)
+  ch.auto_on     = cfg:bool('Charm', 'CharmAutoOn', false)
+  ch.max_fails   = cfg:num('Charm', 'CharmMaxFails', 3)
+  ch.donot_raw   = cfg:get('Charm', 'CharmDoNotList', nil)
+  ch.donot_class_raw = cfg:get('Charm', 'CharmDoNotClass', nil)
 end
 
 function state.new(cfg)
@@ -180,6 +191,15 @@ function state.new(cfg)
   st.move.chase_name = nil
 
   st.med.medding = false
+
+  -- charm runtime (config-derived fields set by apply_config; survive reapply)
+  st.charm.list       = nil  -- parsed by charm.setup: { {spell,min,max,mana}, ... }
+  st.charm.donot      = nil  -- name-substring list (charm.setup)
+  st.charm.donot_class= nil  -- short-name set (charm.setup)
+  st.charm.max_affect = 0    -- highest mob level any configured charm can affect (charm.setup)
+  st.charm.spell      = nil  -- chosen charm spell (charm.select_spell)
+  st.charm.pet_id     = 0    -- the mob we are charming / our charm pet
+  st.charm.fail_count = 0    -- consecutive failed charms -> recovery
 
   -- mez runtime (config-derived fields set by apply_config; these survive reapply)
   st.mez.array      = {}     -- list of { id, level, name, timer (os.clock deadline), count }

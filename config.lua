@@ -14,6 +14,7 @@ local LIST_DEFS = {
   gom       = { prefix='GoM',       cond='GoMCond',       size='GoMSize',       section='GoM'  },
   ae        = { prefix='AE',        cond='AECond',        size='AESize',        section='AE'   },
   cures     = { prefix='Cures',     cond='CuresCond',     size='CuresSize',     section='Cures'},
+  charm     = { prefix='Charm',     cond=nil,             size='CharmSize',     section='Charm'},
 }
 
 local function trim(s) return (s:gsub('^%s*(.-)%s*$', '%1')) end

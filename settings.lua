@@ -14,6 +14,7 @@ local combat  = require('muleassist.combat')
 local pull    = require('muleassist.pull')
 local pet     = require('muleassist.pet')
 local mez     = require('muleassist.mez')
+local charm   = require('muleassist.charm')
 
 local settings = {}
 
@@ -37,7 +38,7 @@ local function apply_all(st, cfg)
       and mq.TLO.Me.Gem(cast.misc_gem_lw).Name() or nil
   end
   heal.setup(st); buff.setup(st); petbuff.setup(st); combat.setup(st)
-  pull.setup(st); pet.setup(st); mez.setup(st)
+  pull.setup(st); pet.setup(st); mez.setup(st); charm.setup(st)
 end
 
 function settings.reapply(st)

@@ -15,6 +15,7 @@ local move   = require('muleassist.move')
 local pull   = require('muleassist.pull')
 local pet    = require('muleassist.pet')
 local mez    = require('muleassist.mez')
+local charm  = require('muleassist.charm')
 local settings = require('muleassist.settings')
 
 local function find_config_path(server, char)
@@ -58,6 +59,7 @@ local function main(...)
   pull.setup(st)
   pet.setup(st)
   mez.setup(st)
+  charm.setup(st)
   move.set_camp(st)
   st.move.chase_name = st.main_assist
 
@@ -71,6 +73,11 @@ local function main(...)
   mq.bind('/macamp', function() move.set_camp(st) end)
   mq.bind('/macamphere', function() st.move.return_to_camp = true; move.set_camp(st) end)
   mq.bind('/mareload', function() st.pending_reapply = true end)
+  -- Manual charm target (full /charmthis bind set lands in Phase 7): no arg -> current target.
+  mq.bind('/macharm', function(arg)
+    if arg == 'clear' or arg == 'off' then st.charm.pet_id = 0; Write.Info('Charm target cleared')
+    else st.charm.pet_id = mq.TLO.Target.ID() or 0; Write.Info('Charm target set to %d', st.charm.pet_id) end
+  end)
 
   local ui_mod = nil
   mq.bind('/maui', function()
@@ -123,6 +130,8 @@ local function main(...)
     pull.tick(st)
     -- DoMezStuff (@1554): CC adds before the DPS pass. Stands down while pulling / no MA target.
     mez.tick(st)
+    -- CharmStuff (@1606): (re)charm the configured/auto target when petless. ENC/DRU only.
+    charm.tick(st)
     -- CheckForCombat (@1576/Sub Main): assist + DPS/melee. Populates st.combat.* that the
     -- heal/buff/rez combat gates read; internally gated on DPSOn/MeleeOn + combat state.
     combat.tick(st)

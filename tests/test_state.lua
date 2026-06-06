@@ -69,6 +69,11 @@ function t.run()
   assert(st.pet.spell == 'Emissary of Thule', 'PetSpell from fixture')
   assert(st.pet.summon_until == 0, 'pet summon_until runtime init')
 
+  assert(type(st.charm) == 'table', 'st.charm missing')
+  assert(st.charm.on == false, 'CharmOn default false (fixture)')
+  assert(st.charm.pet_id == 0, 'charm pet_id runtime init')
+  assert(st.charm.fail_count == 0, 'charm fail_count runtime init')
+
   -- apply_config is re-runnable: picks up edits, preserves runtime fields
   st.camp.x = 111
   st.pull.state = 'outbound'
