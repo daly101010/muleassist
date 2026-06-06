@@ -67,6 +67,11 @@ function state.apply_config(st, cfg)
   st.pet.buffs_on     = cfg:bool('Pet', 'PetBuffsOn', false)
   st.pet.shrink_on    = cfg:bool('Pet', 'PetShrinkOn', false)
   st.pet.shrink_spell = cfg:get('Pet', 'PetShrinkSpell', 'Tiny Companion')
+  st.pet.on           = cfg:bool('Pet', 'PetOn', false)          -- summon/maintain a pet
+  st.pet.spell        = cfg:get('Pet', 'PetSpell', nil)
+  st.pet.hold         = cfg:get('Pet', 'PetHold', 'hold')        -- /pet <hold> on
+  st.pet.hold_on      = cfg:bool('Pet', 'PetHoldOn', true)
+  st.pet.taunt_on     = cfg:bool('Pet', 'PetTauntOn', false)
 
   -- cfg MainAssist wins, but keep an arg/auto-derived value if cfg is empty
   st.main_assist = cfg:get('General', 'MainAssist', nil) or st.main_assist
@@ -164,6 +169,9 @@ function state.new(cfg)
   st.buff.entries = {}; st.buff.timers = {}; st.buff.oog_timers = {}; st.buff.read_deadline = 0
 
   st.pet.check_secs = 60; st.pet.check_deadline = 0; st.pet.entries = {}
+  st.pet.summon_until = 0     -- os.clock() throttle between failed summon attempts
+  st.pet.taunt_set    = false -- taunt enabled for the current pet (reset when pet changes)
+  st.pet.last_pet_id  = 0     -- detect a new pet so we re-apply taunt
 
   st.main_assist_id = 0
 

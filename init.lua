@@ -13,6 +13,7 @@ local combat = require('muleassist.combat')
 local med    = require('muleassist.med')
 local move   = require('muleassist.move')
 local pull   = require('muleassist.pull')
+local pet    = require('muleassist.pet')
 local mez    = require('muleassist.mez')
 local settings = require('muleassist.settings')
 
@@ -55,6 +56,7 @@ local function main(...)
   petbuff.setup(st)
   combat.setup(st)
   pull.setup(st)
+  pet.setup(st)
   mez.setup(st)
   move.set_camp(st)
   st.move.chase_name = st.main_assist
@@ -112,6 +114,8 @@ local function main(...)
     -- CheckBuffs is gated only on BuffsOn at the macro call site (@1576); its internal
     -- combat gate (aggro + BuffMode) decides whether to act, so call unconditionally.
     buff.tick(st)
+    -- DoPetStuff (@1569): summon/maintain the pet when out of combat (before buffing it).
+    pet.tick(st)
     -- CheckPetBuffs (@1569): own slot, gated on PetBuffsOn + pet exists + 60s throttle.
     petbuff.tick(st)
     -- FindMobToPull (@1597): puller/hunter fetch a mob to camp. Runs before combat so it

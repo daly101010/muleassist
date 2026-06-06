@@ -65,6 +65,10 @@ function t.run()
   assert(st.mez.radius == 50, 'MezRadius from fixture (50)')
   assert(type(st.mez.array) == 'table', 'mez array is a table')
 
+  assert(st.pet.on == true, 'PetOn from fixture (1)')
+  assert(st.pet.spell == 'Emissary of Thule', 'PetSpell from fixture')
+  assert(st.pet.summon_until == 0, 'pet summon_until runtime init')
+
   -- apply_config is re-runnable: picks up edits, preserves runtime fields
   st.camp.x = 111
   st.pull.state = 'outbound'
