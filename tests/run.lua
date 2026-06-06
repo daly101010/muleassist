@@ -13,6 +13,7 @@ local mods = {
   'muleassist.tests.test_combat',
   'muleassist.tests.test_settings',
   'muleassist.tests.test_diff',
+  'muleassist.tests.test_mez',
 }
 
 local ok_all = true

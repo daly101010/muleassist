@@ -13,6 +13,7 @@ local combat = require('muleassist.combat')
 local med    = require('muleassist.med')
 local move   = require('muleassist.move')
 local pull   = require('muleassist.pull')
+local mez    = require('muleassist.mez')
 local settings = require('muleassist.settings')
 
 local function find_config_path(server, char)
@@ -54,6 +55,7 @@ local function main(...)
   petbuff.setup(st)
   combat.setup(st)
   pull.setup(st)
+  mez.setup(st)
   move.set_camp(st)
   st.move.chase_name = st.main_assist
 
@@ -115,6 +117,8 @@ local function main(...)
     -- FindMobToPull (@1597): puller/hunter fetch a mob to camp. Runs before combat so it
     -- drives movement during the pull (combat stands down while st.pull.state ~= 'idle').
     pull.tick(st)
+    -- DoMezStuff (@1554): CC adds before the DPS pass. Stands down while pulling / no MA target.
+    mez.tick(st)
     -- CheckForCombat (@1576/Sub Main): assist + DPS/melee. Populates st.combat.* that the
     -- heal/buff/rez combat gates read; internally gated on DPSOn/MeleeOn + combat state.
     combat.tick(st)

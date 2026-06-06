@@ -60,6 +60,11 @@ function t.run()
   assert(st.pull.move_use == 'nav', 'pull move_use defaults nav')
   assert(st.pull.dragging == 0, 'pull dragging starts 0')
 
+  assert(type(st.mez) == 'table', 'st.mez missing')
+  assert(st.mez.on == 0, 'MezOn from fixture (0)')
+  assert(st.mez.radius == 50, 'MezRadius from fixture (50)')
+  assert(type(st.mez.array) == 'table', 'mez array is a table')
+
   -- apply_config is re-runnable: picks up edits, preserves runtime fields
   st.camp.x = 111
   st.pull.state = 'outbound'

@@ -87,6 +87,20 @@ function state.apply_config(st, cfg)
   st.med.start      = cfg:num('General', 'MedStart', 90)
   st.med.sit_to_med = cfg:bool('General', 'SitToMed', false)
 
+  st.mez = st.mez or {}
+  local mz = st.mez
+  mz.on         = cfg:num('Mez', 'MezOn', 0)        -- 0 off, 1 AE+single, 2 single, 3 AE
+  mz.radius     = cfg:num('Mez', 'MezRadius', 50)
+  mz.stop_hp    = cfg:num('Mez', 'MezStopHPs', 80)  -- skip mobs already below this %
+  mz.min_level  = cfg:num('Mez', 'MezMinLevel', 0)
+  mz.max_level  = cfg:num('Mez', 'MezMaxLevel', 200)
+  mz.spell      = cfg:get('Mez', 'MezSpell', nil)
+  mz.ae_raw     = cfg:get('Mez', 'MezAESpell', nil) -- "spell|count"
+  mz.mod        = cfg:num('Mez', 'MezMod', 0)
+  mz.move_los   = cfg:bool('General', 'MoveCloserIfNoLOS', false)
+  mz.immune_raw = cfg:get('Mez', 'MezImmune', nil)
+  if mz.max_level == 0 then mz.max_level = 200 end
+
   st.pull = st.pull or {}
   local pl = st.pull
   pl.with        = cfg:get('Pull', 'PullWith', 'Melee')
@@ -158,6 +172,14 @@ function state.new(cfg)
   st.move.chase_name = nil
 
   st.med.medding = false
+
+  -- mez runtime (config-derived fields set by apply_config; these survive reapply)
+  st.mez.array      = {}     -- list of { id, level, name, timer (os.clock deadline), count }
+  st.mez.ae_until   = 0      -- os.clock() deadline before the next AE mez
+  st.mez.ae_spell   = nil    -- resolved by mez.setup from ae_raw
+  st.mez.ae_count   = 0      -- AE trigger threshold from ae_raw arg2
+  st.mez.immune     = nil    -- name-set parsed by mez.setup
+  st.mez.immune_ids = {}     -- [spawnID]=true, learned at cast time (Phase 7 events)
 
   local pl = st.pull
   pl.range = 15; pl.range_type = 'Melee'; pl.pull_min = 1; pl.pull_max = 200
