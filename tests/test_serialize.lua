@@ -65,6 +65,42 @@ function t.run()
   local h2 = S.parse_heal('Superior Healing|70', nil)
   eq(h2.tag, '', 'heal no tag'); eq(S.heal_to_string(h2), 'Superior Healing|70', 'heal no-tag roundtrip')
 
+  -- DPS grammar
+  local d1 = S.parse_dps('Ice Comet|95', nil)
+  assert(d1.spell == 'Ice Comet' and d1.part2 == 95 and d1.target == 'Mob'
+    and d1.persistent == false and d1.once == false and d1.if_tag == nil, 'plain DD')
+  assert(d1.hp_pct == 95 and d1.is_debuff == false, 'legacy aliases on plain DD')
+
+  local d2 = S.parse_dps('Fierce Eye|100|Me', nil)
+  assert(d2.target == 'Me', 'self target')
+
+  local d3 = S.parse_dps('Malo|101|debuffall', nil)
+  assert(d3.target == 'debuffall' and d3.persistent == true and d3.is_debuff == true, 'debuffall + persistent')
+
+  -- arg-shift: keyword in arg3
+  local d4 = S.parse_dps('Cripple|95|notif|Cripple', nil)
+  assert(d4.if_tag == 'notif' and d4.if_spell == 'Cripple' and d4.target == 'Mob', 'arg-shift notif')
+  assert(d4.cond_tag == 'notif' and d4.cond_spell == 'Cripple', 'legacy cond_tag/cond_spell aliases')
+
+  -- non-shift: target then keyword
+  local d5 = S.parse_dps('Spell|95|MA|if|Slow', nil)
+  assert(d5.target == 'MA' and d5.if_tag == 'if' and d5.if_spell == 'Slow', 'target + if')
+
+  -- once
+  local d6 = S.parse_dps('Disc|95|once', nil)
+  assert(d6.once == true and d6.target == 'Mob', 'once -> once flag, target Mob')
+
+  -- round-trip (semantic fields preserved)
+  for _, raw in ipairs({ 'Ice Comet|95', 'Fierce Eye|100|Me', 'Malo|101|debuffall',
+                         'Spell|95|MA|if|Slow', 'Disc|95|once' }) do
+    local e = S.parse_dps(raw, nil)
+    local out = S.dps_to_string(e)
+    local e2 = S.parse_dps(out, nil)
+    assert(e2.spell == e.spell and e2.part2 == e.part2 and e2.target == e.target
+      and e2.if_tag == e.if_tag and e2.if_spell == e.if_spell and e2.once == e.once,
+      'dps round-trip for '..raw..' -> '..out)
+  end
+
   print('test_serialize: PASS')
   return true
 end

@@ -133,4 +133,55 @@ function serialize.heal_to_string(e)
   return table.concat(fields, '|')
 end
 
+-- DPS entry: spell | part2 | part3 | part4 | part5  (CombatCast @3167-3185).
+-- part2: 1-100 mob-HP% gate; >=101 persistent (no timer reset on switch).
+-- part3: target (Me/Feign/MA/debuffall) OR the literal 'once' OR, if it is an if/notif
+--        keyword, the arg-shift form. part4/part5: if|notif|ifme|notifme + spell.
+local DPS_KEYWORDS = { ['if']=true, ['notif']=true, ['ifme']=true, ['notifme']=true }
+
+function serialize.parse_dps(raw, cond)
+  local a = pipe_split(raw or '')
+  local spell = trim(a[1] or '')
+  local part2 = tonumber(trim(a[2] or '')) or 0
+  local a3 = trim(a[3] or '')
+  local once = (a3:lower() == 'once')
+  local target, if_tag, if_spell
+  if DPS_KEYWORDS[a3] then
+    if_tag   = a3
+    if_spell = trim(a[4] or '')
+    target   = (trim(a[5] or '') ~= '' and trim(a[5])) or 'Mob'
+  else
+    target   = (once or a3 == '') and 'Mob' or a3
+    local a4 = trim(a[4] or '')
+    if_tag   = DPS_KEYWORDS[a4] and a4 or nil
+    if_spell = if_tag and trim(a[5] or '') or nil
+  end
+  local persistent = part2 >= 101
+  return {
+    spell = spell, part2 = part2, persistent = persistent, target = target,
+    once = once, if_tag = if_tag, if_spell = if_spell, cond = cond, raw = raw, index = nil,
+    -- legacy aliases consumed by combat.lua (do not remove)
+    hp_pct = part2, is_debuff = persistent, cond_tag = if_tag, cond_spell = if_spell,
+  }
+end
+
+-- Inverse. Canonical order: spell|part2|part3|if_tag|if_spell, where part3 is 'once' when the
+-- once flag is set, else the target. Drops trailing empties (but keeps part3 if tags follow).
+function serialize.dps_to_string(e)
+  local part3 = e.once and 'once' or (e.target or 'Mob')
+  local fields = { e.spell or '', tostring(e.part2 or 0), part3, e.if_tag or '', e.if_spell or '' }
+  -- trim trailing empties; also drop a trailing default 'Mob' part3 when nothing follows it
+  while #fields > 2 do
+    local last = fields[#fields]
+    if last == '' then
+      fields[#fields] = nil
+    elseif #fields == 3 and last == 'Mob' then
+      fields[#fields] = nil
+    else
+      break
+    end
+  end
+  return table.concat(fields, '|')
+end
+
 return serialize
