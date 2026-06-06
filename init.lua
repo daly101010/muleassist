@@ -21,10 +21,22 @@ local events = require('muleassist.events')
 local settings = require('muleassist.settings')
 local util   = require('muleassist.util')
 
+local function file_exists(p)
+  local f = io.open(p, 'r'); if f then f:close(); return true end
+  return false
+end
+
 local function find_config_path(server, char)
   local cfgdir = mq.TLO.MacroQuest.Path('config')() or '.'
-  local primary = config.locate(server, char)
-  return cfgdir .. '/' .. primary
+  local level  = tonumber(mq.TLO.Me.Level()) or 0
+  local plain, leveled = config.locate(server, char, level)
+  -- Macro @454: prefer the level-suffixed INI (MuleAssist_<srv>_<char>_<lvl>.ini) when it
+  -- exists, else the plain one (which is also the default when neither exists yet).
+  if leveled then
+    local lp = cfgdir .. '/' .. leveled
+    if file_exists(lp) then return lp end
+  end
+  return cfgdir .. '/' .. plain
 end
 
 local function main(...)
