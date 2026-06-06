@@ -41,7 +41,55 @@ function events.register(st)
     end
   end)
 
-  Write.Info('events: cast-outcome handlers registered')
+  ----------------------------------------------------------------------
+  -- 7b-2: CC / charm lifecycle events.
+  ----------------------------------------------------------------------
+  local CHARM_CLASSES = { ENC = 1, DRU = 1 }
+  local function lc(s) return (s or ''):lower() end
+
+  -- MezBroke @11046: a mob woke up. Re-mez it (clear its timer) unless the MA broke it.
+  mq.event('ma_mezbroke', '#1# has been awakened by #2#.', function(_line, mezmob, breaker)
+    if (st.mez.on or 0) == 0 then return end
+    if st.main_assist and lc(breaker) == lc(st.main_assist) then return end  -- MA broke it on purpose
+    for _, e in ipairs(st.mez.array) do
+      if lc(e.name) == lc(mezmob) then
+        e.timer = 0
+        Write.Info('Mez broke on %s (by %s) - will re-mez', tostring(mezmob), tostring(breaker))
+      end
+    end
+  end)
+
+  -- WornOff @14972: our mez spell faded off a tracked mob -> re-mez it next tick.
+  mq.event('ma_wornoff', 'Your #1# spell has worn off of #2#.', function(_line, spell, who)
+    if st.mez.spell and lc(spell) == lc(st.mez.spell) then
+      for _, e in ipairs(st.mez.array) do
+        if lc(e.name) == lc(who) then e.timer = 0 end
+      end
+    end
+  end)
+
+  -- Charmed @19048: a charm landed -> adopt the new pet as our charm target.
+  mq.event('ma_charmed', '#1# has been charmed.', function()
+    if not CHARM_CLASSES[(mq.TLO.Me.Class.ShortName() or ''):upper()] then return end
+    local pid = mq.TLO.Me.Pet.ID() or 0
+    if pid > 0 then
+      st.charm.pet_id, st.charm.fail_count = pid, 0
+      Write.Info('Charm pet acquired: %s', mq.TLO.Me.Pet.CleanName() or tostring(pid))
+    end
+  end)
+
+  -- CannotCharm @19252: this NPC is uncharmable -> drop the charm target.
+  mq.event('ma_cannotcharm', 'This NPC cannot be charmed.', function()
+    Write.Info('%s cannot be charmed - clearing charm target', mq.TLO.Target.CleanName() or '?')
+    st.charm.pet_id = 0
+  end)
+
+  -- ConCheck @19303: rare-spawn alert.
+  mq.event('ma_concheck', '#1# -#*#a rare creature#*#', function(_line, mob)
+    Write.Warn('Rare creature spotted: %s', tostring(mob))
+  end)
+
+  Write.Info('events: cast-outcome + CC/charm handlers registered')
 end
 
 return events
