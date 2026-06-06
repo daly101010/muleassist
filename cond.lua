@@ -14,7 +14,9 @@ function cond.expand(str)
   return mq.parse(str)
 end
 
--- Sandbox for native conditions: pure reads only (no os/io/load/_G).
+-- Sandbox for native conditions: blocks os/io/load/_G/dofile by name. NOTE: mq and the
+-- string lib are full references, so write methods (mq.cmd, string.rep) remain reachable --
+-- acceptable here since conditions come from the user's own INI, not untrusted input.
 local ENV = {
   mq = mq, math = math, string = string,
   tonumber = tonumber, tostring = tostring, ipairs = ipairs, pairs = pairs,

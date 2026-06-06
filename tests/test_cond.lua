@@ -12,9 +12,10 @@ function t.run()
   assert(cond.eval('NULL') == true, 'NULL should be true')
   assert(cond.eval('FALSE') == false, 'FALSE should be false')
 
-  -- Live MQ TLO evaluation.
+  -- Bare comparisons (no ${}) now route through the native Lua path.
   assert(cond.eval('1>2') == false, '1>2 should be false')
   assert(cond.eval('2>1') == true, '2>1 should be true')
+  -- Legacy ${} expression routes through mq.parse.
   assert(cond.eval('${Me.Level} > 0') == true, 'my level should be > 0')
 
   -- expand returns the parsed string.
