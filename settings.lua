@@ -62,4 +62,23 @@ function settings.reapply(st)
   return true
 end
 
+-- Set one config value live: write it into cfg, re-derive all state in place, then persist.
+-- Used by the bind layer (changevarint/togglevariable). Returns the new value, or nil on error.
+function settings.set(st, section, key, value)
+  local cfg = st.cfg
+  cfg.sections[section] = cfg.sections[section] or {}
+  cfg.sections[section][key] = tostring(value)
+  cfg._lists = {}                                  -- invalidate list cache for re-derive
+  local ok, e = pcall(apply_all, st, cfg)
+  if not ok then Write.Error('settings.set: %s', tostring(e)); return nil end
+  pcall(config.save, cfg)                          -- persist (normalizes INI ordering)
+  return cfg:get(section, key)
+end
+
+-- Flip a 0/1 config flag live (togglevariable). Returns the new numeric value.
+function settings.toggle(st, section, key)
+  local cur = st.cfg:bool(section, key, false)
+  return settings.set(st, section, key, cur and 0 or 1)
+end
+
 return settings

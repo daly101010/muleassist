@@ -16,6 +16,7 @@ local pull   = require('muleassist.pull')
 local pet    = require('muleassist.pet')
 local mez    = require('muleassist.mez')
 local charm  = require('muleassist.charm')
+local binds  = require('muleassist.binds')
 local settings = require('muleassist.settings')
 
 local function find_config_path(server, char)
@@ -73,6 +74,7 @@ local function main(...)
   mq.bind('/macamp', function() move.set_camp(st) end)
   mq.bind('/macamphere', function() st.move.return_to_camp = true; move.set_camp(st) end)
   mq.bind('/mareload', function() st.pending_reapply = true end)
+  binds.register(st)   -- Phase 7a: KissAssist-style toggle/set command surface
   -- Manual charm target (full /charmthis bind set lands in Phase 7): no arg -> current target.
   mq.bind('/macharm', function(arg)
     if arg == 'clear' or arg == 'off' then st.charm.pet_id = 0; Write.Info('Charm target cleared')

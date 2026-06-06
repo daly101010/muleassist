@@ -16,6 +16,7 @@ local mods = {
   'muleassist.tests.test_mez',
   'muleassist.tests.test_pet',
   'muleassist.tests.test_charm',
+  'muleassist.tests.test_binds',
 }
 
 local ok_all = true
