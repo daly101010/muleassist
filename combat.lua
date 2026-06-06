@@ -413,7 +413,8 @@ function combat.tank_all_mobs(st)
 end
 
 ----------------------------------------------------------------------
--- Debuff-all DPS entries (Arg2>=101; DoDebuffStuff core): apply each once to the target.
+-- Persistent debuffs (Arg2>=101) on the single assist target: apply each once while it holds.
+-- (NB: distinct from combat.debuff_all_tick, which spreads `debuffall` entries to all XTargets.)
 ----------------------------------------------------------------------
 function combat.debuff(st)
   local c = st.combat
@@ -446,7 +447,7 @@ function combat.debuff_all_tick(st)
       local sp = mq.TLO.Spawn(id)
       if (sp.Distance() or 9999) < melee and mqbool(sp.LineOfSight()) then
         for _, e in ipairs(c.debuff_all) do
-          local has = mq.TLO.Spawn(id).CachedBuff(e.spell).ID() ~= nil
+          local has = sp.CachedBuff(e.spell).ID() ~= nil
           if (force or not has) and spell_ready(e.spell) and ready(st, e.index, id)
              and cond_pass(st, e, id) then
             if cast.cast(e.spell, 'debuffall', id) == 'CAST_SUCCESS' then
