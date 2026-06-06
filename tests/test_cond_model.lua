@@ -32,8 +32,9 @@ function t.run()
   local rp = cm.parse(s)
   assert(rp.mode == 'rows' and #rp.rows == 2 and rp.rows[1].key == 'target_hp', 'emit/parse round-trip')
 
-  -- empty
+  -- empty / nil
   assert(cm.parse('').mode == 'rows' and #cm.parse('').rows == 0, 'empty -> zero rows')
+  assert(cm.parse(nil).mode == 'rows' and #cm.parse(nil).rows == 0, 'nil -> zero rows (no throw)')
 
   print('test_cond_model: PASS')
   return true
