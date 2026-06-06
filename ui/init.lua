@@ -14,6 +14,7 @@ local utils = require('muleassist.ui.utils')
 local filedialog = require('muleassist.ui.lib.imguifiledialog')
 local cache = require('muleassist.ui.lib.cache')
 local serialize = require('muleassist.serialize')
+local cond_model = require('muleassist.cond_model')
 local diff = require('muleassist.ui.diff')
 
 local M = {}                 -- module export (mount/toggle for embedding)
@@ -587,6 +588,71 @@ local function DrawOOGBuilder(idbase, oog)
   return oog
 end
 
+-- Shared hybrid condition editor. Returns the (possibly edited) condition string.
+local condRawMode = {}   -- [idbase] = true  (user forced raw)
+local function DrawConditionBuilder(idbase, condString)
+    condString = condString or ''
+    local parsed = cond_model.parse(condString)
+    local useRaw = condRawMode[idbase] or parsed.mode == 'raw'
+
+    if useRaw then
+        ImGui.PushItemWidth(350)
+        local newRaw = ImGui.InputText('Condition (raw)##raw'..idbase, condString)
+        ImGui.PopItemWidth()
+        if condString:find('${', 1, true) then
+            ImGui.SameLine(); utils.HelpMarker('Legacy ${} condition - evaluated as-is.')
+        end
+        if ImGui.SmallButton('Try builder##tb'..idbase) then
+            condRawMode[idbase] = nil
+            if cond_model.parse(newRaw).mode == 'raw' then condRawMode[idbase] = true end
+        end
+        return newRaw
+    end
+
+    local rows = parsed.rows
+    for ri, row in ipairs(rows) do
+        ImGui.PushID(idbase..'r'..ri)
+        local subj = nil
+        for _, s in ipairs(cond_model.SUBJECTS) do if s.key == row.key then subj = s end end
+        local label = subj and subj.label or row.key
+        if ImGui.BeginCombo('##subj', label) then
+            for _, s in ipairs(cond_model.SUBJECTS) do
+                if ImGui.Selectable(s.label, s.key == row.key) then row.key = s.key; row.op = s.ops[1] end
+            end
+            if ImGui.Selectable('Target has buff', row.key=='target_has_buff') then row.key='target_has_buff'; row.op=nil end
+            if ImGui.Selectable('Target missing buff', row.key=='target_missing_buff') then row.key='target_missing_buff'; row.op=nil end
+            ImGui.EndCombo()
+        end
+        ImGui.SameLine()
+        if row.key == 'target_has_buff' or row.key == 'target_missing_buff' then
+            ImGui.PushItemWidth(160)
+            row.value = ImGui.InputText('##bval', row.value or '')
+            ImGui.PopItemWidth()
+        else
+            local ops = (subj and subj.ops) or {'<','<=','>','>=','==','~='}
+            ImGui.PushItemWidth(60)
+            if ImGui.BeginCombo('##op', row.op or ops[1]) then
+                for _, o in ipairs(ops) do if ImGui.Selectable(o, o == row.op) then row.op = o end end
+                ImGui.EndCombo()
+            end
+            ImGui.PopItemWidth()
+            ImGui.SameLine(); ImGui.PushItemWidth(120)
+            row.value = ImGui.InputText('##val', row.value or '')
+            ImGui.PopItemWidth()
+        end
+        ImGui.SameLine()
+        if ImGui.SmallButton('x') then table.remove(rows, ri) end
+        ImGui.PopID()
+    end
+    if ImGui.SmallButton('+ condition##add'..idbase) then
+        rows[#rows+1] = { key='target_hp', op='<', value='100' }
+    end
+    ImGui.SameLine()
+    if ImGui.SmallButton('raw##forceraw'..idbase) then condRawMode[idbase] = true end
+
+    return cond_model.emit(rows)
+end
+
 -- Structured editor for a Buffs entry. Replaces the raw Name|Options fields.
 local function DrawStructuredBuff(sectionName, valueKey, value)
   local cfg = globals.Config[sectionName]
@@ -683,9 +749,7 @@ local function DrawStructuredBuff(sectionName, valueKey, value)
 
   -- Condition
   if value['Conditions'] then
-    ImGui.PushItemWidth(320)
-    local c = ImGui.InputText('Condition##cond'..valueKey, e.cond or '')
-    ImGui.PopItemWidth()
+    local c = DrawConditionBuilder(sectionName..valueKey..'b', e.cond or '')
     e.cond = (c ~= '') and c or nil
     utils.HelpMarker(value['CondTooltip'] or '')
   end
@@ -742,9 +806,7 @@ local function DrawStructuredHeal(sectionName, valueKey, value)
   utils.HelpMarker(value['OptionsTooltip'] or '')
 
   if value['Conditions'] then
-    ImGui.PushItemWidth(320)
-    local c = ImGui.InputText('Condition##cond'..valueKey, e.cond or '')
-    ImGui.PopItemWidth()
+    local c = DrawConditionBuilder(sectionName..valueKey..'h', e.cond or '')
     e.cond = (c ~= '') and c or nil
     utils.HelpMarker(value['CondTooltip'] or '')
   end
@@ -792,7 +854,8 @@ local function DrawSelectedListItem(sectionName, key, value)
         if globals.Config[sectionName][valueCondKey] == nil then
             globals.Config[sectionName][valueCondKey] = 'NULL'
         end
-        globals.Config[sectionName][valueCondKey] = DrawKeyAndInputText('Conditions: ', '##cond'..sectionName..valueKey, globals.Config[sectionName][valueCondKey], value['CondTooltip'])
+        globals.Config[sectionName][valueCondKey] =
+          DrawConditionBuilder(sectionName..valueKey..'gen', globals.Config[sectionName][valueCondKey] or '')
     end
     local spell = tloCache:get(valueParts[1], function() return mq.TLO.Spell(valueParts[1]) end)
     if mq.TLO.Me.Book(spell.RankName())() then
