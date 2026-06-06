@@ -9,6 +9,7 @@
 local mq    = require('mq')
 local Write = require('muleassist.Write')
 local cast  = require('muleassist.cast')
+local util  = require('muleassist.util')
 local events = {}
 
 function events.register(st)
@@ -44,7 +45,6 @@ function events.register(st)
   ----------------------------------------------------------------------
   -- 7b-2: CC / charm lifecycle events.
   ----------------------------------------------------------------------
-  local CHARM_CLASSES = { ENC = 1, DRU = 1 }
   local function lc(s) return (s or ''):lower() end
 
   -- MezBroke @11046: a mob woke up. Re-mez it (clear its timer) unless the MA broke it.
@@ -70,7 +70,7 @@ function events.register(st)
 
   -- Charmed @19048: a charm landed -> adopt the new pet as our charm target.
   mq.event('ma_charmed', '#1# has been charmed.', function()
-    if not CHARM_CLASSES[(mq.TLO.Me.Class.ShortName() or ''):upper()] then return end
+    if not util.CHARM_CLASSES[(mq.TLO.Me.Class.ShortName() or ''):upper()] then return end
     local pid = mq.TLO.Me.Pet.ID() or 0
     if pid > 0 then
       st.charm.pet_id, st.charm.fail_count = pid, 0

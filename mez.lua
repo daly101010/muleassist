@@ -6,22 +6,11 @@
 local mq    = require('mq')
 local Write = require('muleassist.Write')
 local cast  = require('muleassist.cast')
+local util  = require('muleassist.util')
 local mez   = {}
 
-local MEZ_CLASSES = { ENC = 1, BRD = 1, NEC = 1 }
-
-local function mqbool(v)
-  local t = type(v)
-  if t == 'boolean' then return v end
-  if t == 'number'  then return v ~= 0 end
-  if t == 'string'  then local u = v:upper(); return u == 'TRUE' or u == '1' end
-  return false
-end
-local function class_short() return (mq.TLO.Me.Class.ShortName() or ''):upper() end
-local function is_mezzer()  return MEZ_CLASSES[class_short()] ~= nil end
-local function is_bard()    return class_short() == 'BRD' end
-local function can_ae()     local c = class_short(); return c == 'BRD' or c == 'ENC' end
-local function nav_loaded() return mqbool(mq.TLO.Navigation.MeshLoaded()) end
+local function is_bard()    return util.class_short() == 'BRD' end
+local function can_ae()     local c = util.class_short(); return c == 'BRD' or c == 'ENC' end
 
 local function parse_list(s)
   if not s or s == '' or s:lower() == 'null' then return nil end
@@ -89,7 +78,7 @@ function mez.radar(st)
     local e  = m.array[i]
     local sp = mq.TLO.Spawn(e.id)
     local gone     = not sp.ID() or sp.Type() == 'Corpse'
-    local inactive = not mqbool(sp.Aggressive()) and not mqbool(sp.Mezzed())
+    local inactive = not util.mqbool(sp.Aggressive()) and not util.mqbool(sp.Mezzed())
     if gone or inactive then table.remove(m.array, i) end
   end
   return count, ae_closest, ae_in_radius
@@ -109,10 +98,10 @@ local function eligible(st, e)
   if (sp.Distance3D() or 9999) >= m.radius then return false end
   if (sp.PctHPs() or 100) < m.stop_hp then return false end        -- already being killed
   if e.level > m.max_level or e.level < m.min_level then return false end
-  if not mqbool(sp.LineOfSight()) then
-    if m.move_los and nav_loaded() and st.main_assist_id ~= 0 then
+  if not util.mqbool(sp.LineOfSight()) then
+    if m.move_los and util.nav_loaded() and st.main_assist_id ~= 0 then
       local mad = mq.TLO.Spawn(st.main_assist_id).Distance3D()
-      if mad and mad < 150 and not mqbool(mq.TLO.Navigation.Active()) then
+      if mad and mad < 150 and not util.mqbool(mq.TLO.Navigation.Active()) then
         mq.cmdf('/nav id %d', st.main_assist_id)                   -- move into LOS; re-eval next tick
       end
     end
@@ -123,7 +112,7 @@ local function eligible(st, e)
   if m.immune and m.immune[nm] then return false end
   if m.immune_ids[e.id] then return false end
   if (mq.TLO.Me.CurrentMana() or 0) < (mq.TLO.Spell(m.spell).Mana() or 0) then return false end
-  if os.clock() < (e.timer or 0) and mqbool(sp.Mezzed()) then return false end  -- still mezzed
+  if os.clock() < (e.timer or 0) and util.mqbool(sp.Mezzed()) then return false end  -- still mezzed
   return true
 end
 
@@ -132,23 +121,23 @@ end
 ----------------------------------------------------------------------
 function mez.cast(st, e)
   local m = st.mez
-  if mqbool(mq.TLO.Me.Combat()) then
+  if util.mqbool(mq.TLO.Me.Combat()) then
     mq.cmd('/attack off')
-    mq.delay(250, function() return not mqbool(mq.TLO.Me.Combat()) end)
+    mq.delay(250, function() return not util.mqbool(mq.TLO.Me.Combat()) end)
   end
   if mq.TLO.Target.ID() ~= e.id then
     mq.cmdf('/target id %d', e.id)
     mq.delay(1000, function() return mq.TLO.Target.ID() == e.id end)
-    mq.delay(1000, function() return mqbool(mq.TLO.Target.BuffsPopulated()) end)
+    mq.delay(1000, function() return util.mqbool(mq.TLO.Target.BuffsPopulated()) end)
   end
   if mq.TLO.Target.ID() ~= e.id then return end
   -- double-mez protection: already mezzed with healthy remaining duration (macro @10451/10560)
-  if mqbool(mq.TLO.Target.Mezzed.ID()) then
+  if util.mqbool(mq.TLO.Target.Mezzed.ID()) then
     local rem  = mq.TLO.Target.Mezzed.Duration.TotalSeconds() or 0
     local full = (mq.TLO.Spell(m.spell).Duration.TotalSeconds() or 0) + (m.mod or 0)
     if rem > full * 0.10 then e.timer = os.clock() + rem * 0.75; return end
   end
-  if not mqbool(mq.TLO.Target.LineOfSight()) then return end
+  if not util.mqbool(mq.TLO.Target.LineOfSight()) then return end
   if cast.cast(m.spell, 'Mez', e.id) == 'CAST_SUCCESS' then
     e.count = (e.count or 0) + 1
     e.timer = os.clock() + (mq.TLO.Spell(m.spell).Duration.TotalSeconds() or 18) * 0.75
@@ -180,14 +169,14 @@ function mez.tick(st)
   if (m.on or 0) == 0 then return end
   if not m.spell or m.spell == '' then return end
   if st.flags.buff_mode or st.flags.zombie_mode then return end
-  if mqbool(mq.TLO.Me.Hovering()) then return end
+  if util.mqbool(mq.TLO.Me.Hovering()) then return end
   if st.pull and st.pull.state ~= 'idle' then return end           -- coexist with pulling
-  if not is_mezzer() then return end
+  if not util.is_mezzer() then return end
   -- wait for the group to engage: no assist target yet but the MA exists (macro @10233)
   if not st.combat.my_target_id and st.main_assist_id ~= 0 then return end
 
   local mob_count, ae_closest, ae_in_radius = mez.radar(st)
-  local ma_alive = st.main_assist_id ~= 0 and not mqbool(mq.TLO.Spawn(st.main_assist_id).Dead())
+  local ma_alive = st.main_assist_id ~= 0 and not util.mqbool(mq.TLO.Spawn(st.main_assist_id).Dead())
   if mob_count < 2 and ma_alive then return end                    -- nothing worth mezzing
 
   -- AE branch (BRD/ENC only; macro @10287)
@@ -200,7 +189,7 @@ function mez.tick(st)
 
   -- single branch (one mez per tick; the loop continues across ticks)
   if not (m.on == 1 or m.on == 2) then return end
-  if not is_bard() and not mqbool(mq.TLO.Me.SpellReady(m.spell)()) then return end
+  if not is_bard() and not util.mqbool(mq.TLO.Me.SpellReady(m.spell)()) then return end
   for _, e in ipairs(m.array) do
     if eligible(st, e) then mez.cast(st, e); return end
   end

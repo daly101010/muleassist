@@ -4,20 +4,8 @@
 -- so heals/combat/med keep reacting. Nav primary (MQ2Nav), /moveto + /stick fallbacks. No MQ2Melee.
 local mq    = require('mq')
 local Write = require('muleassist.Write')
+local util  = require('muleassist.util')
 local move  = {}
-
-local PULLER_ROLES = { puller=1, pullertank=1, hunter=1, pullerpettank=1, hunterpettank=1 }
-
-local function mqbool(v)
-  local t = type(v)
-  if t == 'boolean' then return v end
-  if t == 'number'  then return v ~= 0 end
-  if t == 'string'  then local u = v:upper(); return u == 'TRUE' or u == '1' end
-  return false
-end
-
-local function nav_loaded() return mqbool(mq.TLO.Navigation.MeshLoaded()) end
-local function nav_active() return mqbool(mq.TLO.Navigation.Active()) end
 
 -- Snapshot the current position as camp (macro @577-579 / /camphere @16029).
 function move.set_camp(st)
@@ -35,8 +23,6 @@ end
 move.dist_to_camp = dist_to_camp
 function move.in_camp(st) return dist_to_camp(st) < (st.camp.radius or 60) end
 
-local function is_puller(st) return PULLER_ROLES[(st.combat.role or ''):lower()] ~= nil end
-
 -- Chase the MA (Sub DoWeMove @5814). Single command per tick.
 local function do_chase(st)
   local m = st.move
@@ -46,12 +32,12 @@ local function do_chase(st)
   if not sp.ID() then return end
   local d = sp.Distance() or 0
   if d <= m.chase_distance then
-    if nav_active() then mq.cmd('/nav stop') end   -- close enough; don't overrun
+    if util.nav_active() then mq.cmd('/nav stop') end   -- close enough; don't overrun
     return
   end
-  if nav_loaded() then
-    if not nav_active() then mq.cmdf('/nav id %d', sp.ID()) end
-  elseif not mqbool(mq.TLO.AdvPath.Following()) then
+  if util.nav_loaded() then
+    if not util.nav_active() then mq.cmdf('/nav id %d', sp.ID()) end
+  elseif not util.mqbool(mq.TLO.AdvPath.Following()) then
     mq.cmdf('/stick %d id %d loose', m.chase_distance, sp.ID())
   end
 end
@@ -61,14 +47,14 @@ local function do_return(st)
   local m = st.move
   if not st.camp.x then return end
   local d = dist_to_camp(st)
-  if d > (st.camp.exceed or 400) and not is_puller(st) then m.return_to_camp = false; return end
+  if d > (st.camp.exceed or 400) and not util.is_puller(st) then m.return_to_camp = false; return end
   if d > m.return_accuracy and d > (st.camp.radius or 60) then
-    if nav_loaded() then
-      if not nav_active() then mq.cmdf('/nav locxyz %f %f %f', st.camp.x, st.camp.y, st.camp.z) end
-    elseif not mqbool(mq.TLO.MoveTo.Moving()) then
+    if util.nav_loaded() then
+      if not util.nav_active() then mq.cmdf('/nav locxyz %f %f %f', st.camp.x, st.camp.y, st.camp.z) end
+    elseif not util.mqbool(mq.TLO.MoveTo.Moving()) then
       mq.cmdf('/moveto loc %f %f mdist %d', st.camp.y, st.camp.x, m.return_accuracy)
     end
-  elseif nav_active() and d <= (st.camp.radius or 60) then
+  elseif util.nav_active() and d <= (st.camp.radius or 60) then
     mq.cmd('/nav stop')
   end
 end

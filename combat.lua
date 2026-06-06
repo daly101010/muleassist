@@ -8,18 +8,10 @@ local Write = require('muleassist.Write')
 local cast  = require('muleassist.cast')
 local cond  = require('muleassist.cond')
 local serialize = require('muleassist.serialize')
+local util   = require('muleassist.util')
 local combat = {}
 
 local HUB_ZONES = { poknowledge=1, guildlobby=1, guildhall=1, bazaar=1, nexus=1 }
-
--- MQ bool TLOs can return the strings "TRUE"/"FALSE" rather than Lua booleans.
-local function mqbool(v)
-  local t = type(v)
-  if t == 'boolean' then return v end
-  if t == 'number'  then return v ~= 0 end
-  if t == 'string'  then local u = v:upper(); return u == 'TRUE' or u == '1' end
-  return false
-end
 
 -- Ask a DanNet peer to evaluate an MQ expression against its own state. Returns the string
 -- result, or nil if not a peer / no answer.
@@ -118,13 +110,7 @@ end
 ----------------------------------------------------------------------
 -- Tank role: acquire own target (Sub Assist @1999-2090, simplified).
 ----------------------------------------------------------------------
-local TANK_ROLES = { tank=1, pullertank=1, pettank=1, pullerpettank=1 }
 local MEZ_ANIM   = { [26]=1, [32]=1, [71]=1, [72]=1, [17]=1, [111]=1, [129]=1 }
-
-local function is_tank(st)
-  return TANK_ROLES[(st.combat.role or ''):lower()] ~= nil
-      or (st.main_assist ~= nil and st.main_assist == mq.TLO.Me.CleanName())
-end
 
 -- Pick a target as the tank from XTarget auto-haters: named first, else closest to camp.
 local function tank_pick_target(st)
@@ -136,7 +122,7 @@ local function tank_pick_target(st)
   for i = 1, 13 do
     local xt = mq.TLO.Me.XTarget(i)
     if (xt.ID() or 0) > 0 and (xt.TargetType() or '') == 'Auto Hater' and (xt.Type() or '') == 'NPC' then
-      if mqbool(xt.Named()) then bestNamed = xt.ID(); break end
+      if util.mqbool(xt.Named()) then bestNamed = xt.ID(); break end
       local d = mq.TLO.Math.Distance(string.format('%f,%f:%f,%f', xt.Y() or 0, xt.X() or 0, cy, cx))()
       if not bestCloseDist or (d or 9999) < bestCloseDist then bestClose = xt.ID(); bestCloseDist = d or 9999 end
     end
@@ -157,7 +143,7 @@ end
 -- Assist (Sub Assist @1860, core): set my_target_id from the MA's target.
 ----------------------------------------------------------------------
 local function assist(st)
-  if is_tank(st) then tank_pick_target(st); return end
+  if util.is_tank(st) then tank_pick_target(st); return end
   local c = st.combat
   local ma = st.main_assist
   if not ma or ma == '' or ma == mq.TLO.Me.CleanName() then return end
@@ -204,13 +190,13 @@ local function can_start_combat(st)
   if ty ~= 'NPC' and ty ~= 'PET' then return false end
   -- Tanks initiate, so they engage at full HP (macro forces AssistAt=100 for tank roles);
   -- assists wait until the MA brings the mob to AssistAt%.
-  local at = is_tank(st) and 100 or c.assist_at
+  local at = util.is_tank(st) and 100 or c.assist_at
   if (sp.PctHPs() or 100) > at then return false end
   local dist = sp.Distance() or 9999
   if dist < c.melee_dist then return true end
   -- Camp-distance gate: anchor on SELF when tanking (we are the camp center), else on the MA.
   local ay, ax
-  if is_tank(st) then
+  if util.is_tank(st) then
     ay, ax = st.camp.y or mq.TLO.Me.Y(), st.camp.x or mq.TLO.Me.X()
   else
     local ma = mq.TLO.Spawn('=' .. (st.main_assist or ''))
@@ -243,9 +229,9 @@ end
 
 local function spell_ready(name)
   local rank = mq.TLO.Spell(name).RankName()
-  return mqbool(mq.TLO.Me.SpellReady(rank)()) or mqbool(mq.TLO.Me.AltAbilityReady(name)())
-      or mqbool(mq.TLO.Me.CombatAbilityReady(rank)()) or mqbool(mq.TLO.Me.AbilityReady(name)())
-      or mqbool(mq.TLO.Me.ItemReady(name)())
+  return util.mqbool(mq.TLO.Me.SpellReady(rank)()) or util.mqbool(mq.TLO.Me.AltAbilityReady(name)())
+      or util.mqbool(mq.TLO.Me.CombatAbilityReady(rank)()) or util.mqbool(mq.TLO.Me.AbilityReady(name)())
+      or util.mqbool(mq.TLO.Me.ItemReady(name)())
 end
 
 -- Engage melee: attack + stick + face (re-attack offset -5 handled by can_start_combat gate).
@@ -255,11 +241,11 @@ local function engage(st)
   local id = c.my_target_id
   if not id then return end
   if mq.TLO.Target.ID() ~= id then mq.cmdf('/target id %d', id) end
-  if not mqbool(mq.TLO.Me.Combat()) then mq.cmd('/attack on'); c.attacking = true end
+  if not util.mqbool(mq.TLO.Me.Combat()) then mq.cmd('/attack on'); c.attacking = true end
   if c.face_on then mq.cmd('/face fast nolook') end
-  if not mqbool(mq.TLO.Stick.Active()) then
+  if not util.mqbool(mq.TLO.Stick.Active()) then
     -- Tanks always hold the front so the mob faces them; everyone else uses StickHow.
-    local how = (is_tank(st) and c.tank_stick) or c.stick_how or '12'
+    local how = (util.is_tank(st) and c.tank_stick) or c.stick_how or '12'
     mq.cmdf('/stick %s id %d', how, id)
   end
 end
@@ -298,7 +284,7 @@ function combat.rotation(st)
     elseif e.target == 'MA' then cast_id = st.main_assist_id end
     -- send pet in
     if c.pet_combat_on and (sp.PctHPs() or 100) <= c.pet_assist_at
-       and mq.TLO.Me.Pet.ID() and not mqbool(mq.TLO.Me.Pet.Combat()) then
+       and mq.TLO.Me.Pet.ID() and not util.mqbool(mq.TLO.Me.Pet.Combat()) then
       mq.cmdf('/pet attack %d', tid)
     end
     local is_cmd = e.spell:find('^command:') ~= nil
@@ -306,7 +292,13 @@ function combat.rotation(st)
        and (sp.PctHPs() or 100) <= e.hp_pct
        and ready(st, e.index, tid)
        and cond_pass(st, e, tid) then
-      if cast.cast(e.spell, 'dps', cast_id) == 'CAST_SUCCESS' then
+      if is_cmd then
+        local cmd = e.spell:gsub('^command:%s*', '', 1)
+        if cmd ~= '' then
+          mq.cmd(cmd)
+          arm(st, e.index, tid, c.dps_interval)
+        end
+      elseif cast.cast(e.spell, 'dps', cast_id) == 'CAST_SUCCESS' then
         local dur
         if e.target == 'spam' then
           dur = c.dps_interval
@@ -344,8 +336,8 @@ end
 ----------------------------------------------------------------------
 function combat.reset(st)
   local c = st.combat
-  if c.attacking or mqbool(mq.TLO.Me.Combat()) then mq.cmd('/attack off') end
-  if mqbool(mq.TLO.Stick.Active()) then mq.cmd('/stick off') end
+  if c.attacking or util.mqbool(mq.TLO.Me.Combat()) then mq.cmd('/attack off') end
+  if util.mqbool(mq.TLO.Stick.Active()) then mq.cmd('/stick off') end
   c.combat_start = nil
   c.attacking = nil
   c.my_target_id = nil
@@ -386,7 +378,7 @@ end
 ----------------------------------------------------------------------
 function combat.tank_all_mobs(st)
   local c = st.combat
-  if not is_tank(st) then return end
+  if not util.is_tank(st) then return end
   local radius = st.camp.radius or 60
   local n = tonumber(mq.TLO.SpawnCount('npc radius ' .. radius .. ' targetable zradius 10')()) or 0
   local me = mq.TLO.Me.CleanName()
@@ -401,9 +393,9 @@ function combat.tank_all_mobs(st)
         mq.cmdf('/target id %d', id)
         mq.delay(1000, function() return mq.TLO.Target.ID() == id end)
         if mq.TLO.Target.ID() == id and not mq.TLO.Target.Mezzed.ID() and not mq.TLO.Target.Rooted.ID() then
-          if not mqbool(mq.TLO.Me.Combat()) then mq.cmd('/attack on') end
+          if not util.mqbool(mq.TLO.Me.Combat()) then mq.cmd('/attack on') end
           mq.cmd('/face fast nolook')
-          if mqbool(mq.TLO.Me.AbilityReady('taunt')) then mq.cmd('/doability taunt') end
+          if util.mqbool(mq.TLO.Me.AbilityReady('taunt')) then mq.cmd('/doability taunt') end
           combat.aggro_check(st, id)
         end
       end
@@ -447,7 +439,7 @@ function combat.debuff_all_tick(st)
     local id = xt.ID() or 0
     if id > 0 and (xt.TargetType() or '') == 'Auto Hater' and (xt.Type() or '') == 'NPC' then
       local sp = mq.TLO.Spawn(id)
-      if (sp.Distance() or 9999) < melee and mqbool(sp.LineOfSight()) then
+      if (sp.Distance() or 9999) < melee and util.mqbool(sp.LineOfSight()) then
         for _, e in ipairs(c.debuff_all) do
           local has = sp.CachedBuff(e.spell).ID() ~= nil
           if (force or not has) and spell_ready(e.spell) and ready(st, e.index, id)
@@ -469,7 +461,7 @@ function combat.named_watch(st)
   local c = st.combat
   if not c.burn_all_named or c.named_check then return end
   local tid = c.my_target_id
-  if tid and mqbool(mq.TLO.Spawn(tid).Named()) then
+  if tid and util.mqbool(mq.TLO.Spawn(tid).Named()) then
     Write.Info('*** %s is NAMED -- bursting', mq.TLO.Spawn(tid).CleanName() or '?')
     combat.burn(st)
     c.named_check = true
@@ -505,7 +497,7 @@ function combat.tick(st)
   if can_start_combat(st) then
     c.combat_start = true
     engage(st)
-    if is_tank(st) then combat.tank_all_mobs(st) end
+    if util.is_tank(st) then combat.tank_all_mobs(st) end
     combat.debuff(st)
     combat.named_watch(st)
     combat.rotation(st)

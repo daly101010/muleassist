@@ -9,22 +9,8 @@ local Write = require('muleassist.Write')
 local cast  = require('muleassist.cast')
 local cond  = require('muleassist.cond')
 local move  = require('muleassist.move')
+local util  = require('muleassist.util')
 local pull  = {}
-
-local PULLER_ROLES = { puller=1, pullertank=1, hunter=1, pullerpettank=1, hunterpettank=1 }
-local HUNTER_ROLES = { hunter=1, hunterpettank=1 }
-
-local function mqbool(v)
-  local t = type(v)
-  if t == 'boolean' then return v end
-  if t == 'number'  then return v ~= 0 end
-  if t == 'string'  then local u = v:upper(); return u == 'TRUE' or u == '1' end
-  return false
-end
-local function nav_loaded() return mqbool(mq.TLO.Navigation.MeshLoaded()) end
-local function nav_active() return mqbool(mq.TLO.Navigation.Active()) end
-local function is_puller(st) return PULLER_ROLES[(st.combat.role or ''):lower()] ~= nil end
-local function is_hunter(st) return HUNTER_ROLES[(st.combat.role or ''):lower()] ~= nil end
 
 -- Parse a comma list of mob names into a lookup set (nil/empty/"All" -> nil = no filter).
 local function parse_list(s)
@@ -54,7 +40,7 @@ function pull.setup(st)
   else
     local r = mq.TLO.Spell(w).Range() or 0
     if r == 0 then r = mq.TLO.FindItem('=' .. w).Spell.Range() or 0 end
-    local divisor = is_hunter(st) and 2.75 or 1.11
+    local divisor = util.is_hunter(st) and 2.75 or 1.11
     p.range, p.range_type = (r > 0 and r / divisor) or 50, 'Spell'
   end
 
@@ -72,13 +58,13 @@ function pull.setup(st)
   p.mob_list_sec = parse_list(p.mobs_sec)
 
   -- Pull arc (SetPullAngles @18108): centered on current heading, width PullArcWidth.
-  if p.arc_width and p.arc_width > 0 and is_puller(st) then
+  if p.arc_width and p.arc_width > 0 and util.is_puller(st) then
     pull.set_arc(st, mq.TLO.Me.Heading.Degrees() or 0, p.arc_width)
   end
 
   -- AdvPath pull route: if a PullPath is loaded, use /play instead of /nav.
   p.path_wp_count = tonumber(mq.TLO.AdvPath.Waypoints()) or 0
-  p.move_use = (p.path_wp_count > 0 and mqbool(mq.TLO.Plugin('MQ2AdvPath').IsLoaded())) and 'advpath' or 'nav'
+  p.move_use = (p.path_wp_count > 0 and util.mqbool(mq.TLO.Plugin('MQ2AdvPath').IsLoaded())) and 'advpath' or 'nav'
 
   Write.Info('pull.setup: with=%s range=%.0f(%s) lvl=%d-%d chain=%d move=%s', tostring(p.with),
     p.range, p.range_type, p.pull_min, p.pull_max, p.chain or 0, p.move_use)
@@ -132,15 +118,15 @@ local function validate(st, id, allow_sec)
     'pc radius 50 loc %f %f', sp.X() or 0, sp.Y() or 0))()) or 0
   if (sp.Distance() or 9999) <= 50 then pc_near = pc_near - 1 end  -- discount myself
   if pc_near > 0 then return false end
-  if not nav_loaded() and not mqbool(sp.LineOfSight()) then return false end
-  if mqbool(sp.Named()) and (st.combat.mob_count or 0) > 0 then return false end
+  if not util.nav_loaded() and not util.mqbool(sp.LineOfSight()) then return false end
+  if util.mqbool(sp.Named()) and (st.combat.mob_count or 0) > 0 then return false end
   return true
 end
 
 local function scan(st, allow_sec)
   local p = st.pull
   local query
-  if is_hunter(st) then
+  if util.is_hunter(st) then
     query = string.format('range %d %d npc radius %d zradius %d targetable',
       p.pull_min, p.pull_max, p.max_radius, p.max_z)
   else
@@ -154,9 +140,9 @@ local function scan(st, allow_sec)
     if id and validate(st, id, allow_sec) then
       local sp = mq.TLO.Spawn(id)
       local score
-      if p.namedsfirst and mqbool(sp.Named()) then
+      if p.namedsfirst and util.mqbool(sp.Named()) then
         score = -1
-      elseif nav_loaded() then
+      elseif util.nav_loaded() then
         local pl = mq.TLO.Navigation.PathLength(string.format('locxyz %f %f %f',
           sp.X() or 0, sp.Y() or 0, sp.FloorZ() or 0))()
         score = (pl and pl > 0) and pl or (sp.Distance() or 99999)
@@ -184,8 +170,8 @@ function pull.reset(st)
   local p = st.pull
   p.state = 'idle'; p.target_id = nil; p.attempts = 0
   st.combat.pulled = nil
-  if nav_active() then mq.cmd('/nav stop') end
-  if mqbool(mq.TLO.MoveTo.Moving()) then mq.cmd('/moveto off') end
+  if util.nav_active() then mq.cmd('/nav stop') end
+  if util.mqbool(mq.TLO.MoveTo.Moving()) then mq.cmd('/moveto off') end
 end
 
 -- Calm adds before a spell pull (Pull @13076): if >1 mob clusters near the pull target,
@@ -198,7 +184,7 @@ local function try_calm(st, mobid)
   if (tonumber(mq.TLO.SpawnCount(q)()) or 0) <= 1 then return end
   local calm_id = mq.TLO.NearestSpawn('2,' .. q).ID()
   if not calm_id or calm_id == mobid then return end
-  if mqbool(mq.TLO.Spawn(calm_id).Mezzed()) then return end
+  if util.mqbool(mq.TLO.Spawn(calm_id).Mezzed()) then return end
   Write.Info('Calming add %s', mq.TLO.Spawn(calm_id).CleanName() or tostring(calm_id))
   cast.cast(p.calm_with, 'Pull', calm_id)
   mq.cmdf('/target id %d', mobid)
@@ -214,7 +200,7 @@ local function execute(st, id)
   end
   if p.range_type == 'Melee' then
     mq.cmd('/face fast nolook')
-    if not mqbool(mq.TLO.Me.Combat()) then mq.cmd('/attack on') end
+    if not util.mqbool(mq.TLO.Me.Combat()) then mq.cmd('/attack on') end
     mq.cmdf('/stick %d id %d', 12, id)
     if (mq.TLO.Spawn(id).PctHPs() or 100) < 100 or st.combat.aggro_target_id then
       mq.cmd('/attack off'); mq.cmd('/stick off'); p.state = 'inbound'
@@ -227,7 +213,7 @@ local function execute(st, id)
     -- Pet pull (Pull @12999): send the pet; it brings the mob back.
     if not mq.TLO.Pet.ID() then pull.reset(st); return end
     mq.cmdf('/pet attack %d', id)
-    if (mq.TLO.Spawn(id).PctHPs() or 100) < 100 or mqbool(mq.TLO.Pet.Combat())
+    if (mq.TLO.Spawn(id).PctHPs() or 100) < 100 or util.mqbool(mq.TLO.Pet.Combat())
        or st.combat.aggro_target_id then
       mq.cmd('/pet hold on'); mq.cmd('/pet back off'); p.state = 'inbound'
     end
@@ -270,27 +256,27 @@ local function outbound(st)
   local sp = mq.TLO.Spawn(id)
   if not sp.ID() or sp.Type() == 'Corpse' or os.clock() > p.abort_deadline then pull.reset(st); return end
   if st.combat.aggro_target_id then
-    p.state = 'inbound'; if nav_active() then mq.cmd('/nav stop') end
-    if mqbool(mq.TLO.AdvPath.Following()) then mq.cmd('/afollow off') end
+    p.state = 'inbound'; if util.nav_active() then mq.cmd('/nav stop') end
+    if util.mqbool(mq.TLO.AdvPath.Following()) then mq.cmd('/afollow off') end
     return
   end
   local dist = sp.Distance() or 9999
-  local in_range = dist <= p.range and mqbool(sp.LineOfSight())
+  local in_range = dist <= p.range and util.mqbool(sp.LineOfSight())
   -- Pet pull stays put and lets the pet run out (no self-movement).
   if p.range_type == 'Pet' then
     if in_range then execute(st, id) end
     return
   end
   if in_range then
-    if nav_active() then mq.cmd('/nav stop') end
-    if mqbool(mq.TLO.AdvPath.Following()) then mq.cmd('/afollow off') end
+    if util.nav_active() then mq.cmd('/nav stop') end
+    if util.mqbool(mq.TLO.AdvPath.Following()) then mq.cmd('/afollow off') end
     execute(st, id)
   elseif p.move_use == 'advpath' then
     -- AdvPath route out to the mob (PullPath; @5684 DoWeMove route playback).
-    if not mqbool(mq.TLO.AdvPath.Following()) then mq.cmd('/play PullPath nodoor smart normal') end
-  elseif nav_loaded() then
-    if not nav_active() then mq.cmdf('/nav spawn id %d | dist=%d', id, math.max(p.range - 3, 5)) end
-  elseif not mqbool(mq.TLO.MoveTo.Moving()) then
+    if not util.mqbool(mq.TLO.AdvPath.Following()) then mq.cmd('/play PullPath nodoor smart normal') end
+  elseif util.nav_loaded() then
+    if not util.nav_active() then mq.cmdf('/nav spawn id %d | dist=%d', id, math.max(p.range - 3, 5)) end
+  elseif not util.mqbool(mq.TLO.MoveTo.Moving()) then
     mq.cmdf('/moveto id %d mdist %d', id, math.floor(p.range))
   end
 end
@@ -301,10 +287,10 @@ local function inbound(st)
   if not sp.ID() or sp.Type() == 'Corpse' then pull.reset(st); return end
   st.combat.pulled = true
   grab_dead(st)                                          -- haul a fallen group corpse home too
-  if is_hunter(st) then pull.reset(st); return end       -- hunters fight in place
+  if util.is_hunter(st) then pull.reset(st); return end       -- hunters fight in place
   if move.in_camp(st) then pull.reset(st); return end    -- arrived; combat takes over
   if p.move_use == 'advpath' then
-    if not mqbool(mq.TLO.AdvPath.Following()) then mq.cmd('/play PullPath reverse nodoor smart') end
+    if not util.mqbool(mq.TLO.AdvPath.Following()) then mq.cmd('/play PullPath reverse nodoor smart') end
     return
   end
   move.return_now(st)
@@ -340,7 +326,7 @@ end
 
 function pull.tick(st)
   local p = st.pull
-  if not is_puller(st) then return end
+  if not util.is_puller(st) then return end
   if st.flags.buff_mode or st.flags.zombie_mode then return end
   if mq.TLO.Me.Hovering() then return end
 
@@ -354,7 +340,7 @@ function pull.tick(st)
     if (p.chain or 0) == 0 then return end
     -- Chain: don't over-pull (@11700) and only pull the next when the current mob is low (@11713).
     if (st.combat.mob_count or 0) > 1 then return end
-    if mqbool(mq.TLO.Me.XTarget(2).ID()) then return end
+    if util.mqbool(mq.TLO.Me.XTarget(2).ID()) then return end
     local cur = st.combat.my_target_id or st.combat.aggro_target_id
     if (mq.TLO.Spawn(cur).PctHPs() or 100) >= (p.chain_hp or 90) then return end
   end

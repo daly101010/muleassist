@@ -8,18 +8,9 @@
 local mq    = require('mq')
 local Write = require('muleassist.Write')
 local cast  = require('muleassist.cast')
+local util  = require('muleassist.util')
 local pet   = {}
 
-local GUARD_ROLES   = { puller=1, pullertank=1, pettank=1, pullerpettank=1 }
-local PETTANK_ROLES = { pettank=1, pullerpettank=1 }
-
-local function mqbool(v)
-  local t = type(v)
-  if t == 'boolean' then return v end
-  if t == 'number'  then return v ~= 0 end
-  if t == 'string'  then local u = v:upper(); return u == 'TRUE' or u == '1' end
-  return false
-end
 local function role(st) return (st.combat.role or ''):lower() end
 
 function pet.setup(st)
@@ -30,10 +21,10 @@ end
 local function summon(st)
   local p = st.pet
   if not p.on or not p.spell or p.spell == '' or p.spell == 'YourPetSpell' then return false end
-  if mqbool(mq.TLO.Me.Pet.ID()) then return false end
+  if util.mqbool(mq.TLO.Me.Pet.ID()) then return false end
   if os.clock() < (p.summon_until or 0) then return false end
-  if mqbool(mq.TLO.Me.Casting.ID()) then return false end
-  if not mqbool(mq.TLO.Me.Book(p.spell)()) then return false end       -- spell must be scribed
+  if util.mqbool(mq.TLO.Me.Casting.ID()) then return false end
+  if not util.mqbool(mq.TLO.Me.Book(p.spell)()) then return false end       -- spell must be scribed
 
   -- reagent check (macro @8377): if the pet spell needs a focus reagent we lack, stop trying.
   local reagent = mq.TLO.Spell(p.spell).ReagentID(1)() or 0
@@ -63,7 +54,7 @@ local function manage_stance(st)
 
   if pid ~= p.last_pet_id then p.taunt_set = false; p.last_pet_id = pid end  -- new pet
 
-  if GUARD_ROLES[r] and st.camp.x then
+  if util.GUARD_ROLES[r] and st.camp.x then
     local pd = mq.TLO.Me.Pet.Distance() or 0
     if pd <= (st.camp.radius or 60) then
       if mq.TLO.Me.Pet.Stance() ~= 'GUARD' then mq.cmd('/pet guard') end
@@ -74,10 +65,10 @@ local function manage_stance(st)
 
   if p.hold_on and p.hold and p.hold ~= '' then
     -- /pet hold on (idempotent enough; only nudge when not already holding)
-    if not mqbool(mq.TLO.Me.Pet.Hold()) then mq.cmdf('/pet %s on', p.hold) end
+    if not util.mqbool(mq.TLO.Me.Pet.Hold()) then mq.cmdf('/pet %s on', p.hold) end
   end
 
-  if PETTANK_ROLES[r] and not p.taunt_set then
+  if util.PETTANK_ROLES[r] and not p.taunt_set then
     mq.cmd('/pet taunt on'); p.taunt_set = true
   end
 end
@@ -85,7 +76,7 @@ end
 function pet.tick(st)
   local p = st.pet
   if st.flags.buff_mode or st.flags.zombie_mode then return end
-  if mqbool(mq.TLO.Me.Hovering()) or mqbool(mq.TLO.Me.Invis()) then return end
+  if util.mqbool(mq.TLO.Me.Hovering()) or util.mqbool(mq.TLO.Me.Invis()) then return end
   if st.combat.aggro_target_id then return end                  -- don't summon mid-combat
   if st.pull and st.pull.state ~= 'idle' then return end
 

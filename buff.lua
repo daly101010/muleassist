@@ -7,29 +7,19 @@ local Write = require('muleassist.Write')
 local cast  = require('muleassist.cast')
 local cond  = require('muleassist.cond')
 local serialize = require('muleassist.serialize')
+local util  = require('muleassist.util')
 local buff  = {}
 
 local CASTER = { CLR=1,DRU=1,SHM=1,BST=1,ENC=1,MAG=1,NEC=1,PAL=1,SHD=1,RNG=1,WIZ=1 }
 local MELEE  = { BRD=1,BER=1,BST=1,MNK=1,PAL=1,ROG=1,RNG=1,SHD=1,WAR=1 }
 
--- MQ bool TLO members (Stacks/StacksSpawn/StacksTarget) can come back as the STRINGS
--- "TRUE"/"FALSE"/"NULL" rather than Lua booleans -- and "FALSE" is truthy in Lua, so a
--- naive `if not Spell.StacksSpawn(id)()` never skips a non-stacking buff. Coerce robustly.
-local function mqbool(v)
-  local t = type(v)
-  if t == 'boolean' then return v end
-  if t == 'number'  then return v ~= 0 end
-  if t == 'string'  then local u = v:upper(); return u == 'TRUE' or u == '1' end
-  return false  -- nil/unknown -> treat as "no" (don't stack / not ready), the safe default
-end
-
 -- Is this buff castable RIGHT NOW (off cooldown)? If not, the buff loop should skip it this
 -- pass rather than entering cast.cast and waiting for the gem/AA to refresh. Un-memmed spells
 -- pass (Phase 2c will mem them); a memmed spell must be gem-ready; AAs/items use their timers.
 local function buff_ready(name, bufftype)
-  if bufftype == 'aa'   then return mqbool(mq.TLO.Me.AltAbilityReady(name)()) end
-  if bufftype == 'item' then return mqbool(mq.TLO.Me.ItemReady('=' .. name)()) end
-  if mq.TLO.Me.Gem(name)() then return mqbool(mq.TLO.Me.SpellReady(name)()) end
+  if bufftype == 'aa'   then return util.mqbool(mq.TLO.Me.AltAbilityReady(name)()) end
+  if bufftype == 'item' then return util.mqbool(mq.TLO.Me.ItemReady('=' .. name)()) end
+  if mq.TLO.Me.Gem(name)() then return util.mqbool(mq.TLO.Me.SpellReady(name)()) end
   return true
 end
 
@@ -69,7 +59,7 @@ local function peer_buff_decision(st, peer, spell)
   if dur and tonumber(dur) and tonumber(dur) > 30 then return 'skip' end  -- still buffed
   local stk, ok2 = dnet_raw(peer, 'Spell[' .. spell .. '].Stacks', 1000)
   if not ok2 then return nil end
-  return mqbool(stk) and 'cast' or 'skip'
+  return util.mqbool(stk) and 'cast' or 'skip'
 end
 
 -- Indirection so categorization is testable offline (overridden in tests).
@@ -139,10 +129,6 @@ local function cache_buffs(id)
   mq.delay(3000, function() return (mq.TLO.Target.CachedBuffCount() or -1) ~= -1 end)
 end
 
--- ${Group} numeric count. The Lua binding returns the string "FALSE" when solo, so
--- coerce; tonumber("FALSE") -> nil -> 0.
-local function group_size() return tonumber(mq.TLO.Group()) or 0 end
-
 -- Class/archetype gate from an entry's derived archetype + class_list.
 local function class_ok(en, short)
   if en.archetype == 'caster' then return CASTER[short] ~= nil end
@@ -164,7 +150,7 @@ function buff.check_group(st, en, spell_to_cast, buff_sub, spell_range)
   if not buff_ready(spell_to_cast, en.bufftype) then return true end
   local list = {}
 
-  local gn = group_size()
+  local gn = util.group_size()
   for j = 0, gn do
     -- combat abort (macro re-runs GetHostilesOnXTarget per member); CombatState fallback
     -- until Phase 4 supplies aggro_target_id. BuffMode overrides.
@@ -188,7 +174,7 @@ function buff.check_group(st, en, spell_to_cast, buff_sub, spell_range)
 
       if id == me_id then
         if mq.TLO.Me.Buff(sb).ID() or mq.TLO.Me.Song(sb).ID() then break end
-        if not mqbool(mq.TLO.Spell(sb).Stacks()) then break end
+        if not util.mqbool(mq.TLO.Spell(sb).Stacks()) then break end
       else
         -- Authoritative stacking via the peer's own buff list (DanNet); fall back to the
         -- partial local view only when the member isn't a reachable peer.
@@ -198,7 +184,7 @@ function buff.check_group(st, en, spell_to_cast, buff_sub, spell_range)
         else
           cache_buffs(id)
           if (mq.TLO.Spawn(id).CachedBuff(sb).Duration.TotalSeconds() or 0) > 30 then break end
-          if not mqbool(mq.TLO.Spell(sb).StacksSpawn(id)()) then break end
+          if not util.mqbool(mq.TLO.Spell(sb).StacksSpawn(id)()) then break end
         end
       end
       list[#list + 1] = j
@@ -231,7 +217,7 @@ function buff.check_group(st, en, spell_to_cast, buff_sub, spell_range)
           arm(st, en.index, j, en.check_name)
           buff.write_buffs(st)
           if (mq.TLO.Spell(spell_to_cast).TargetType() or ''):find('Group v') then return true end
-          if group_size() == j then return true end
+          if util.group_size() == j then return true end
         end
       end
     end
@@ -256,7 +242,7 @@ function buff.check_ma(st, en, spell_range)
     if decision == 'skip' then return end
   else
     cache_buffs(mat_id)
-    if not mqbool(mq.TLO.Spell(sb).StacksSpawn(mat_id)()) then return end
+    if not util.mqbool(mq.TLO.Spell(sb).StacksSpawn(mat_id)()) then return end
     if (mq.TLO.Spawn(mat_id).CachedBuff(sb).Duration() or 0) > 1000 then return end
   end
   if not ready(st, en.index, 7) then return end
@@ -274,7 +260,7 @@ function buff.check_self(st, en)
   local sb = silver(en.check_name)
   if not buff_ready(en.check_name, en.bufftype) then return end
   if mq.TLO.Me.Buff(sb).ID() or mq.TLO.Me.Song(sb).ID() then return end
-  if not mqbool(mq.TLO.Spell(sb).Stacks()) then return end
+  if not util.mqbool(mq.TLO.Spell(sb).Stacks()) then return end
   if st.buff.cond_on and en.cond and en.cond ~= '' and not cond.eval(en.cond) then return end
   if not ready(st, en.index, 0) then return end
   if en.mgb and mq.TLO.Me.AltAbilityReady('Tranquil Blessing')() then
@@ -385,7 +371,7 @@ end
 
 function buff.buff_once(st, en)
   if mq.TLO.Me.Invis() or mq.TLO.Me.Hovering() then return end
-  if not mqbool(mq.TLO.Spell(en.cast_name).Stacks()) then return end
+  if not util.mqbool(mq.TLO.Spell(en.cast_name).Stacks()) then return end
   if not ready(st, en.index, 0) then return end
   if cast.cast(en.cast_name, 'CheckEndurance', mq.TLO.Me.ID()) == 'CAST_SUCCESS' then
     arm(st, en.index, 0, en.cast_name)
@@ -468,7 +454,7 @@ local function oog_try(st, en, name, id)
     return false
   end
   if not class_ok(en, sp.Class.ShortName() or '') then return false end
-  if not mqbool(mq.TLO.Spell(name).StacksSpawn(id)()) then return false end
+  if not util.mqbool(mq.TLO.Spell(name).StacksSpawn(id)()) then return false end
   if (sp.CachedBuff(name).Duration() or 0) > 180 then return false end
   if st.buff.cond_on and en.cond and en.cond ~= '' and not cond.eval(en.cond) then return false end
   if not cast.will_it_stick(name, id) then return false end
@@ -619,7 +605,7 @@ function buff.tick(st)
       end
 
       if not handled then
-        local grp = group_size() > 0
+        local grp = util.group_size() > 0
         local self_only = (tt:lower() == 'self')
         if grp and not self_only then
           if buff.check_group(st, en, en.cast_name, en.check_name, rng) == false then
