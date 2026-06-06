@@ -285,10 +285,11 @@ function cast.wait_cast(sent_from, cast_time, wspell)
   end
 
   -- :rewaitcast / :waitcasttime loop — spin while we are still casting.
+  local forced_interrupt = false
   while casting() do
     if mq.TLO.Me.Hovering() then return 'CAST_INTERRUPTED' end
     if target_invalid() then
-      mq.cmd('/stopcast'); cast.last_result = 'CAST_INTERRUPTED'; break
+      mq.cmd('/stopcast'); forced_interrupt = true; break
     end
     if mq.TLO.Me.BardSongPlaying() then
       if not mq.TLO.Window('CastingWindow').Open() then
@@ -322,6 +323,7 @@ function cast.wait_cast(sent_from, cast_time, wspell)
     -- Safety: bail if we somehow exceed the cast deadline without resolving.
     if os.clock() > deadline + 30 then
       Write.Warn('WaitCast: exceeded deadline, bailing')
+      forced_interrupt = true   -- don't report a false CAST_SUCCESS for a hung cast
       break
     end
   end
@@ -336,7 +338,9 @@ function cast.wait_cast(sent_from, cast_time, wspell)
   end
 
   mq.doevents()   -- flush cast-outcome events (fizzle/resist/immune/interrupt)
-  local result = cast.last_result or 'CAST_SUCCESS'
+  -- A deliberate /stopcast (target died/left range, or a hung cast) wins over any event the
+  -- doevents flush may have set this frame, so callers see the real interrupt.
+  local result = forced_interrupt and 'CAST_INTERRUPTED' or (cast.last_result or 'CAST_SUCCESS')
   Write.Debug('WaitCast Leaving: %s', result)
   return result
 end
