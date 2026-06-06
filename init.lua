@@ -138,6 +138,7 @@ local function main(...)
     charm.tick(st)
     -- CheckForCombat (@1576/Sub Main): assist + DPS/melee. Populates st.combat.* that the
     -- heal/buff/rez combat gates read; internally gated on DPSOn/MeleeOn + combat state.
+    combat.debuff_all_tick(st)
     combat.tick(st)
     -- DoWeMove (@5571/Combat @2597): return-to-camp / chase the MA. Non-blocking; after combat
     -- (don't move mid-fight) and before med (med skips while Navigation.Active).

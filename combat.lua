@@ -7,6 +7,7 @@ local mq    = require('mq')
 local Write = require('muleassist.Write')
 local cast  = require('muleassist.cast')
 local cond  = require('muleassist.cond')
+local serialize = require('muleassist.serialize')
 local combat = {}
 
 local HUB_ZONES = { poknowledge=1, guildlobby=1, guildhall=1, bazaar=1, nexus=1 }
@@ -36,35 +37,20 @@ end
 ----------------------------------------------------------------------
 -- setup: parse DPS/Burn lists, find the XTarget Auto-Hater slot.
 ----------------------------------------------------------------------
--- Parse a DPS entry's pipe fields with the if/notif arg-shift (CombatCast @3167-3185).
-local function parse_dps(e)
-  local a = e.args
-  local part1 = a[1] or e.spell or ''
-  local part2 = tonumber(a[2] or '') or 0
-  local target, cond_tag, cond_spell
-  local a3 = a[3] or ''
-  if a3 == 'if' or a3 == 'ifme' or a3 == 'notif' or a3 == 'notifme' then
-    target = 'Mob'; cond_tag = a3; cond_spell = a[4]
-  else
-    target = (a3 ~= '' and a3) or 'Mob'; cond_tag = a[4]; cond_spell = a[5]
-  end
-  return {
-    index = e.index, spell = part1, hp_pct = part2, target = target,
-    cond_tag = cond_tag, cond_spell = cond_spell, cond = e.cond,
-    is_debuff = part2 >= 101,
-  }
-end
-
 function combat.setup(st)
-  local dps, debuffs = {}, {}
+  local dps, debuffs, debuff_all = {}, {}, {}
   for _, e in ipairs(st.lists.dps) do
-    local entry = parse_dps(e)
+    local entry = serialize.parse_dps(e.raw, e.cond)
+    entry.index = e.index
     if entry.spell ~= '' and entry.spell:lower() ~= 'null' then
-      if entry.is_debuff then debuffs[#debuffs + 1] = entry else dps[#dps + 1] = entry end
+      if entry.target == 'debuffall' then debuff_all[#debuff_all + 1] = entry
+      elseif entry.is_debuff then debuffs[#debuffs + 1] = entry
+      else dps[#dps + 1] = entry end
     end
   end
   st.combat.entries = dps
   st.combat.debuffs = debuffs
+  st.combat.debuff_all = debuff_all
 
   local burn = {}
   for _, e in ipairs(st.lists.burn) do
@@ -93,8 +79,8 @@ function combat.setup(st)
   for i = 1, 13 do
     if (mq.TLO.Me.XTarget(i).TargetType() or '') == 'Auto Hater' then st.combat.xtslot = i; break end
   end
-  Write.Info('combat.setup: %d dps, %d debuff, %d aggro, %d burn (xtslot=%d)',
-    #dps, #debuffs, #aggro, #burn, st.combat.xtslot)
+  Write.Info('combat.setup: %d dps, %d debuff, %d debuffall, %d aggro, %d burn (xtslot=%d)',
+    #dps, #debuffs, #debuff_all, #aggro, #burn, st.combat.xtslot)
 end
 
 ----------------------------------------------------------------------
@@ -440,6 +426,34 @@ function combat.debuff(st)
     if not has and spell_ready(e.spell) and ready(st, e.index, tid) and cond_pass(st, e, tid) then
       if cast.cast(e.spell, 'dps', tid) == 'CAST_SUCCESS' then
         arm(st, e.index, tid, math.max(mq.TLO.Spell(e.spell).Duration.TotalSeconds() or 0, c.dps_interval))
+      end
+    end
+  end
+end
+
+-- DebuffAll (DoDebuffStuff @10651): apply each `debuffall` entry to every XTarget auto-hater
+-- NPC in melee range + LOS that lacks it. DebuffAllOn 1 = skip if already on; 2 = also force.
+function combat.debuff_all_tick(st)
+  local c = st.combat
+  if (c.debuff_all_on or 0) == 0 or #c.debuff_all == 0 then return end
+  if (c.mob_count or 0) == 0 then return end
+  local force = c.debuff_all_on == 2
+  local melee = c.melee_dist or 25
+  for i = 1, 13 do
+    local xt = mq.TLO.Me.XTarget(i)
+    local id = xt.ID() or 0
+    if id > 0 and (xt.TargetType() or '') == 'Auto Hater' and (xt.Type() or '') == 'NPC' then
+      local sp = mq.TLO.Spawn(id)
+      if (sp.Distance() or 9999) < melee and mqbool(sp.LineOfSight()) then
+        for _, e in ipairs(c.debuff_all) do
+          local has = mq.TLO.Spawn(id).CachedBuff(e.spell).ID() ~= nil
+          if (force or not has) and spell_ready(e.spell) and ready(st, e.index, id)
+             and cond_pass(st, e, id) then
+            if cast.cast(e.spell, 'debuffall', id) == 'CAST_SUCCESS' then
+              arm(st, e.index, id, math.max(mq.TLO.Spell(e.spell).Duration.TotalSeconds() or 0, c.dps_interval))
+            end
+          end
+        end
       end
     end
   end

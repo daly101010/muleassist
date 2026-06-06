@@ -41,6 +41,7 @@ function state.apply_config(st, cfg)
   c.pet_combat_on  = cfg:bool('Pet', 'PetCombatOn', false)
   c.aggro_on       = cfg:bool('Aggro', 'AggroOn', false)
   c.burn_all_named = cfg:bool('Burn', 'BurnAllNamed', false)
+  c.debuff_all_on = cfg:num('DPS', 'DebuffAllOn', 0)
 
   st.heal = st.heal or {}
   local h = st.heal
@@ -169,6 +170,7 @@ function state.new(cfg)
   c.attacking = nil; c.pulled = nil; c.chasing = nil; c.xtslot = 1
   c.dps_timers = {}; c.entries = {}; c.debuffs = {}; c.aggro = {}
   c.burn = {}; c.burning = false; c.named_check = nil
+  c.debuff_all = {}
 
   local h = st.heal
   h.single = {}; h.group = {}

@@ -41,6 +41,8 @@ function t.run()
   assert(type(st.combat.aggro) == 'table' and type(st.combat.debuffs) == 'table',
     'combat aggro/debuffs tables missing')
   assert(st.combat.aggro_on == false, 'default AggroOn false')
+  assert(type(st.combat.debuff_all) == 'table', 'combat.debuff_all runtime table')
+  assert(st.combat.debuff_all_on == 0, 'DebuffAllOn default 0 (fixture)')
 
   assert(type(st.med) == 'table', 'st.med missing')
   assert(st.med.start == 20, 'MedStart from fixture (20)')
