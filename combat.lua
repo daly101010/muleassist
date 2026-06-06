@@ -436,6 +436,8 @@ end
 -- NPC in melee range + LOS that lacks it. DebuffAllOn 1 = skip if already on; 2 = also force.
 function combat.debuff_all_tick(st)
   local c = st.combat
+  if st.flags.buff_mode or st.flags.zombie_mode then return end   -- same gates as combat.tick
+  if dmz() then return end
   if (c.debuff_all_on or 0) == 0 or #c.debuff_all == 0 then return end
   if (c.mob_count or 0) == 0 then return end
   local force = c.debuff_all_on == 2

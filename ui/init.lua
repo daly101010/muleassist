@@ -875,6 +875,12 @@ local function DrawStructuredDPS(sectionName, valueKey, value)
   end
 
   e.once = ImGui.Checkbox('Cast once (no recast while up)##once'..valueKey, e.once and true or false)
+  -- 'once' occupies the part3 slot in the wire format, so it is mutually exclusive with a
+  -- non-Mob target. Coerce + tell the user rather than silently dropping the target on save.
+  if e.once and e.target ~= 'Mob' then
+    e.target = 'Mob'
+    ImGui.SameLine(); utils.HelpMarker("'once' forces target Mob (they share one INI field).")
+  end
 
   local curTag = e.if_tag or '(none)'
   ImGui.PushItemWidth(160)
@@ -948,8 +954,8 @@ local function DrawSelectedListItem(sectionName, key, value)
         if globals.Config[sectionName][valueCondKey] == nil then
             globals.Config[sectionName][valueCondKey] = 'NULL'
         end
-        globals.Config[sectionName][valueCondKey] =
-          DrawConditionBuilder(sectionName..valueKey..'gen', globals.Config[sectionName][valueCondKey] or '')
+        local genc = DrawConditionBuilder(sectionName..valueKey..'gen', globals.Config[sectionName][valueCondKey] or '')
+        globals.Config[sectionName][valueCondKey] = (genc ~= '') and genc or 'NULL'  -- keep 'NULL' sentinel
     end
     local spell = tloCache:get(valueParts[1], function() return mq.TLO.Spell(valueParts[1]) end)
     if mq.TLO.Me.Book(spell.RankName())() then
