@@ -3,6 +3,7 @@
 -- live client live separately and are added to this list during Phase 1.
 local mods = {
   'muleassist.tests.test_config',
+  'muleassist.tests.test_util',
   'muleassist.tests.test_state',
   'muleassist.tests.test_cond',
   'muleassist.tests.test_cond_model',
