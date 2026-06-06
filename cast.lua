@@ -246,6 +246,8 @@ end
 function cast.wait_cast(sent_from, cast_time, wspell)
   cast_time = cast_time or 0
   Write.Debug('WaitCast Enter SF:%s Ct:%d Sp:%s', tostring(sent_from), cast_time, tostring(wspell))
+  -- Cast-outcome events (events.lua) write cast.last_result during the cast; clear it first.
+  cast.last_result = nil
 
   -- cTimer: cast_time + 20 (game uses tenths-of-second timers; ms here for mq.delay).
   local deadline = os.clock() + (cast_time + 2000) / 1000
@@ -309,9 +311,10 @@ function cast.wait_cast(sent_from, cast_time, wspell)
     mq.cmd('/afollow unpause')
   end
 
-  mq.doevents()
-  Write.Debug('WaitCast Leaving: CAST_SUCCESS')
-  return 'CAST_SUCCESS'
+  mq.doevents()   -- flush cast-outcome events (fizzle/resist/immune/interrupt)
+  local result = cast.last_result or 'CAST_SUCCESS'
+  Write.Debug('WaitCast Leaving: %s', result)
+  return result
 end
 
 return cast
