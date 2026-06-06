@@ -531,6 +531,7 @@ local HEAL_TAGS = { '', 'MA', 'Me', '!MA', 'pet', '!pet', 'Mob', 'Tap', 'xtar' }
 -- We re-parse only when the underlying raw value changed from outside our own writes.
 local buffEdit = {}  -- [valueKey] = { entry = <parsed buff>, srcRaw = <string we last wrote> }
 local healEdit = {}  -- [valueKey] = { entry = <parsed heal>, srcRaw = <string we last wrote> }
+local dpsEdit = {}   -- [valueKey] = { entry = <parsed dps>, srcRaw = <string we last wrote> }
 
 -- Live PC names for the OOG "add from nearby" picker: group + raid + nearby PCs.
 local function live_pc_names()
@@ -818,6 +819,93 @@ local function DrawStructuredHeal(sectionName, valueKey, value)
   cfg[condKey] = e.cond or 'NULL'
 end
 
+-- Structured editor for a DPS entry: spell | mobHP%/recast-tag | target/once | if-tag | if-spell (+ condition).
+local DPS_TARGETS = { 'Mob', 'Me', 'Feign', 'MA', 'debuffall' }
+local DPS_IFTAGS  = { '(none)', 'if', 'notif', 'ifme', 'notifme' }
+
+local function DrawStructuredDPS(sectionName, valueKey, value)
+  local cfg = globals.Config[sectionName]
+  local raw = cfg[valueKey]
+  if raw == nil or raw == 'NULL' then raw = '' end
+  local idx = valueKey:match('(%d+)$') or ''
+  local condKey = sectionName .. 'Cond' .. idx
+  local condRaw = cfg[condKey]
+  if condRaw == 'NULL' then condRaw = nil end
+
+  local cur = dpsEdit[valueKey]
+  if not cur or cur.srcRaw ~= raw then
+    cur = { entry = serialize.parse_dps(raw, condRaw), srcRaw = raw }
+    dpsEdit[valueKey] = cur
+  end
+  local e = cur.entry
+
+  ImGui.PushStyleColor(ImGuiCol.Text, 0, 1, 1, 1)
+  ImGui.Text(valueKey); ImGui.PopStyleColor()
+
+  ImGui.PushItemWidth(260)
+  e.spell = ImGui.InputText('Spell/AA/Disc/Item##name'..valueKey, e.spell or '')
+  if e.spell:find('|') then e.spell = e.spell:match('[^|]+') or e.spell end
+  ImGui.PopItemWidth()
+  utils.HelpMarker(value['Tooltip'] or '')
+
+  -- part2: >=101 encodes a persistent debuff (recast tag); 0-100 is a mob-HP%% cast gate.
+  local persistent = ImGui.Checkbox('Persistent debuff (>=101)##pers'..valueKey, e.part2 >= 101)
+  ImGui.PushItemWidth(120)
+  if persistent then
+    local v = ImGui.InputInt('recast tag##p2'..valueKey, (e.part2 >= 101) and e.part2 or 101)
+    if v < 101 then v = 101 end
+    e.part2 = v
+  else
+    local v = ImGui.InputInt('Cast at mob HP %##p2'..valueKey, (e.part2 <= 100) and e.part2 or 100)
+    if v < 0 then v = 0 elseif v > 100 then v = 100 end
+    e.part2 = v
+  end
+  ImGui.PopItemWidth()
+
+  ImGui.PushItemWidth(160)
+  if ImGui.BeginCombo('Target##tgt'..valueKey, e.target or 'Mob') then
+    for _, tg in ipairs(DPS_TARGETS) do
+      if ImGui.Selectable(tg..'##tgt'..valueKey, tg == e.target) then e.target = tg end
+    end
+    ImGui.EndCombo()
+  end
+  ImGui.PopItemWidth()
+  if e.target == 'debuffall' then
+    ImGui.SameLine(); utils.HelpMarker('Debuffs every mob on XTarget (needs DebuffAllOn).')
+  end
+
+  e.once = ImGui.Checkbox('Cast once (no recast while up)##once'..valueKey, e.once and true or false)
+
+  local curTag = e.if_tag or '(none)'
+  ImGui.PushItemWidth(160)
+  if ImGui.BeginCombo('Only cast##iftag'..valueKey, curTag) then
+    for _, tg in ipairs(DPS_IFTAGS) do
+      if ImGui.Selectable(tg..'##iftag'..valueKey, tg == curTag) then
+        e.if_tag = (tg ~= '(none)') and tg or nil
+      end
+    end
+    ImGui.EndCombo()
+  end
+  ImGui.PopItemWidth()
+  if e.if_tag then
+    ImGui.SameLine()
+    ImGui.PushItemWidth(180)
+    e.if_spell = ImGui.InputText('spell##ifsp'..valueKey, e.if_spell or '')
+    ImGui.PopItemWidth()
+  end
+
+  if value['Conditions'] then
+    local c = DrawConditionBuilder(sectionName..valueKey..'dps', e.cond or '')
+    e.cond = (c ~= '') and c or nil
+    utils.HelpMarker(value['CondTooltip'] or '')
+  end
+
+  local out = (e.spell and e.spell ~= '') and serialize.dps_to_string(e) or ''
+  cfg[valueKey] = out
+  cur.srcRaw = out
+  cfg[condKey] = e.cond or 'NULL'
+end
+
 local function DrawSelectedListItem(sectionName, key, value)
     local valueKey = key..selectedListItem[2]
     if sectionName == 'Buffs' then
@@ -828,6 +916,11 @@ local function DrawSelectedListItem(sectionName, key, value)
     elseif sectionName == 'Heals' then
         ImGui.Separator()
         DrawStructuredHeal(sectionName, valueKey, value)
+        ImGui.Separator()
+        return
+    elseif sectionName == 'DPS' then
+        ImGui.Separator()
+        DrawStructuredDPS(sectionName, valueKey, value)
         ImGui.Separator()
         return
     end
