@@ -27,6 +27,14 @@ local function find_entry(arr, id)
   return nil
 end
 
+-- Is this spawn currently showing our mez (or AE-mez) buff? Spawn has no .Mezzed member
+-- (only Target does), so check CachedBuff for the configured mez spell(s) instead (macro @10173).
+local function spawn_mezzed(sp, m)
+  if m.spell and m.spell ~= '' and util.mqbool(sp.CachedBuff(m.spell).ID()) then return true end
+  if m.ae_spell and m.ae_spell ~= '' and util.mqbool(sp.CachedBuff(m.ae_spell).ID()) then return true end
+  return false
+end
+
 ----------------------------------------------------------------------
 -- setup: resolve AE spell/count + immune list from config.
 ----------------------------------------------------------------------
@@ -78,7 +86,7 @@ function mez.radar(st)
     local e  = m.array[i]
     local sp = mq.TLO.Spawn(e.id)
     local gone     = not sp.ID() or sp.Type() == 'Corpse'
-    local inactive = not util.mqbool(sp.Aggressive()) and not util.mqbool(sp.Mezzed())
+    local inactive = not util.mqbool(sp.Aggressive()) and not spawn_mezzed(sp, m)
     if gone or inactive then table.remove(m.array, i) end
   end
   return count, ae_closest, ae_in_radius
@@ -112,7 +120,7 @@ local function eligible(st, e)
   if m.immune and m.immune[nm] then return false end
   if m.immune_ids[e.id] then return false end
   if (mq.TLO.Me.CurrentMana() or 0) < (mq.TLO.Spell(m.spell).Mana() or 0) then return false end
-  if os.clock() < (e.timer or 0) and util.mqbool(sp.Mezzed()) then return false end  -- still mezzed
+  if os.clock() < (e.timer or 0) and spawn_mezzed(sp, m) then return false end  -- still mezzed
   return true
 end
 
