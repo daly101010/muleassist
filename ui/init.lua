@@ -592,6 +592,7 @@ end
 local condRawMode = {}   -- [idbase] = true  (user forced raw)
 local function DrawConditionBuilder(idbase, condString)
     condString = condString or ''
+    if condString == 'NULL' then condString = '' end   -- stored 'no condition' sentinel
     local parsed = cond_model.parse(condString)
     local useRaw = condRawMode[idbase] or parsed.mode == 'raw'
 
