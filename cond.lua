@@ -1,7 +1,12 @@
 -- muleassist/cond.lua
--- Evaluate MQ TLO condition strings (kept verbatim from the INI) against the live client.
-local mq = require('mq')
-local cond = {}
+-- Evaluate condition strings against the live client. DUAL-MODE:
+--   * strings containing "${" use the legacy MQ parser (mq.parse '${If[...]}')
+--   * everything else is a native Lua expression evaluated with mq in scope
+--     (e.g. "mq.TLO.Target.PctHPs() < 70 and mq.TLO.Me.PctMana() >= 40")
+-- Native chunks are compiled once and cached (conditions evaluate every tick).
+local mq    = require('mq')
+local Write = require('muleassist.Write')
+local cond  = {}
 
 -- mq.parse a string containing ${...} tokens, returning the expanded string.
 function cond.expand(str)
@@ -9,8 +14,38 @@ function cond.expand(str)
   return mq.parse(str)
 end
 
--- Evaluate an MQ boolean condition string.
--- Empty / NULL / TRUE => true; FALSE => false; otherwise wrap in ${If[...]} and parse.
+-- Sandbox for native conditions: pure reads only (no os/io/load/_G).
+local ENV = {
+  mq = mq, math = math, string = string,
+  tonumber = tonumber, tostring = tostring, ipairs = ipairs, pairs = pairs,
+}
+
+local chunk_cache = {}    -- [exprString] = compiled function | false (compile failed)
+local logged_err  = {}    -- dedupe error spam by string
+
+local function native_eval(s)
+  local fn = chunk_cache[s]
+  if fn == nil then
+    local compiled, err = load('return (' .. s .. ')', '@cond', 't', ENV)
+    if not compiled then
+      chunk_cache[s] = false
+      if not logged_err[s] then Write.Error('cond compile failed: %s (%s)', s, tostring(err)); logged_err[s] = true end
+      return false
+    end
+    chunk_cache[s] = compiled
+    fn = compiled
+  elseif fn == false then
+    return false
+  end
+  local ok, res = pcall(fn)
+  if not ok then
+    if not logged_err[s] then Write.Error('cond runtime error: %s (%s)', s, tostring(res)); logged_err[s] = true end
+    return false
+  end
+  return not not res
+end
+
+-- Evaluate a boolean condition string. Empty/NULL/TRUE => true; FALSE => false.
 function cond.eval(str)
   if not str then return true end
   local s = str:gsub('^%s*(.-)%s*$', '%1')
@@ -18,7 +53,10 @@ function cond.eval(str)
   local up = s:upper()
   if up == 'TRUE' or up == 'NULL' then return true end
   if up == 'FALSE' then return false end
-  return mq.parse('${If[' .. s .. ',1,0]}') == '1'
+  if s:find('${', 1, true) then
+    return mq.parse('${If[' .. s .. ',1,0]}') == '1'   -- legacy path
+  end
+  return native_eval(s)                                  -- native Lua path
 end
 
 return cond

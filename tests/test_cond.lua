@@ -22,6 +22,19 @@ function t.run()
   local lvl = cond.expand('${Me.Level}')
   assert(tonumber(lvl) ~= nil, 'expand ${Me.Level} should be numeric, got '..tostring(lvl))
 
+  -- Native mq.TLO Lua conditions (no ${} -> Lua path)
+  assert(cond.eval('1 < 2') == true, 'native 1<2 true')
+  assert(cond.eval('2 < 1') == false, 'native 2<1 false')
+  assert(cond.eval('mq.TLO.Me.Level() > 0') == true, 'native Me.Level()>0 true')
+  assert(cond.eval('mq.TLO.Me.PctMana() >= 0 and mq.TLO.Me.PctHPs() >= 0') == true,
+    'native and-chain true')
+  -- Malformed Lua must fail safe (false, no throw)
+  assert(cond.eval('this is not lua ((') == false, 'malformed native -> false')
+  -- Legacy ${} still works
+  assert(cond.eval('${Me.Level} > 0') == true, 'legacy ${} still evaluates')
+  -- Cache: second eval of the same native string reuses the compiled chunk
+  assert(cond.eval('3 < 4') == true and cond.eval('3 < 4') == true, 'cached native re-eval')
+
   print('test_cond: PASS')
   return true
 end
