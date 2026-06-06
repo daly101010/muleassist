@@ -258,6 +258,27 @@ function cast.wait_cast(sent_from, cast_time, wspell)
     return id ~= nil and id > 0
   end
 
+  -- Mid-cast target validation (RGMercs WaitCastFinish): for a DETRIMENTAL spell aimed at the
+  -- current target, abort if the target dies/despawns or walks out of range mid-cast so we don't
+  -- finish a nuke into a corpse / empty air and waste mana. Beneficial/self/group casts and
+  -- AAs/items (no resolvable Spell) are NOT validated, so heals/buffs are unaffected.
+  local sp = wspell and spell(wspell)
+  local validate, vrange, vtarget = false, 0, 0
+  if sp and (sp.ID() or 0) > 0 and sp.SpellType() == 'Detrimental' then
+    vtarget = mq.TLO.Target.ID() or 0
+    if vtarget > 0 then
+      validate = true
+      vrange = (sp.MyRange() or 0); if vrange == 0 then vrange = sp.Range() or 0 end
+    end
+  end
+  local function target_invalid()
+    if not validate then return false end
+    local tgt = mq.TLO.Target
+    if (tgt.ID() or 0) ~= vtarget or tgt.Type() == 'Corpse' then return true end
+    if vrange > 0 and (tgt.Distance3D() or 0) > vrange * 1.2 then return true end
+    return false
+  end
+
   -- Wait for the cast to actually register (lines 4522-4526).
   if cast_time ~= 0 then
     mq.delay(60, casting)
@@ -266,6 +287,9 @@ function cast.wait_cast(sent_from, cast_time, wspell)
   -- :rewaitcast / :waitcasttime loop — spin while we are still casting.
   while casting() do
     if mq.TLO.Me.Hovering() then return 'CAST_INTERRUPTED' end
+    if target_invalid() then
+      mq.cmd('/stopcast'); cast.last_result = 'CAST_INTERRUPTED'; break
+    end
     if mq.TLO.Me.BardSongPlaying() then
       if not mq.TLO.Window('CastingWindow').Open() then
         Write.Debug('WaitCast: bard, not actually casting; returning')

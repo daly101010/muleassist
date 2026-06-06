@@ -32,6 +32,13 @@ function t.run()
   assert(util.safe('ok', function() return 42 end, -1) == 42, 'safe returns result')
   assert(util.safe('boom', function() error('x') end, -1) == -1, 'safe returns default on error')
 
+  -- guard() pcalls fn(arg) and swallows errors (no throw)
+  local got
+  util.guard('g_ok', function(x) got = x end, 7)
+  assert(got == 7, 'guard passes args')
+  local ran = pcall(function() util.guard('g_boom', function() error('y') end) end)
+  assert(ran == true, 'guard never propagates an error')
+
   print('test_util: PASS')
   return true
 end

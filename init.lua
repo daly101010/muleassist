@@ -19,6 +19,7 @@ local charm  = require('muleassist.charm')
 local binds  = require('muleassist.binds')
 local events = require('muleassist.events')
 local settings = require('muleassist.settings')
+local util   = require('muleassist.util')
 
 local function find_config_path(server, char)
   local cfgdir = mq.TLO.MacroQuest.Path('config')() or '.'
@@ -113,39 +114,23 @@ local function main(...)
     end
     -- Keep MainAssistID fresh (macro @1607); heal MA-heals and combat 'MA'-target DPS need it.
     st.main_assist_id = mq.TLO.Spawn('=' .. (st.main_assist or '')).ID() or 0
-    -- Refresh combat state early so heal/buff/rez gates (aggro_target_id) are current this tick.
-    combat.refresh(st)
-    -- Macro main-loop order: state -> move -> heal -> rez -> buff -> DPS. Later
-    -- phases insert their ticks around these. rez.check is its own loop slot
-    -- (Sub Main @1561), independent of HealsOn, gated internally on AutoRezOn.
-    heal.tick(st)
-    if st.rez.auto ~= 0 then rez.check(st) end
-    -- CastMana (@1566) is its own slot, runs near-combat; gated internally on Invis/cond.
-    buff.run_mana(st)
-    -- CheckBuffs is gated only on BuffsOn at the macro call site (@1576); its internal
-    -- combat gate (aggro + BuffMode) decides whether to act, so call unconditionally.
-    buff.tick(st)
-    -- DoPetStuff (@1569): summon/maintain the pet when out of combat (before buffing it).
-    pet.tick(st)
-    -- CheckPetBuffs (@1569): own slot, gated on PetBuffsOn + pet exists + 60s throttle.
-    petbuff.tick(st)
-    -- FindMobToPull (@1597): puller/hunter fetch a mob to camp. Runs before combat so it
-    -- drives movement during the pull (combat stands down while st.pull.state ~= 'idle').
-    pull.tick(st)
-    -- DoMezStuff (@1554): CC adds before the DPS pass. Stands down while pulling / no MA target.
-    mez.tick(st)
-    -- CharmStuff (@1606): (re)charm the configured/auto target when petless. ENC/DRU only.
-    charm.tick(st)
-    -- CheckForCombat (@1576/Sub Main): assist + DPS/melee. Populates st.combat.* that the
-    -- heal/buff/rez combat gates read; internally gated on DPSOn/MeleeOn + combat state.
-    combat.debuff_all_tick(st)
-    combat.tick(st)
-    -- DoWeMove (@5571/Combat @2597): return-to-camp / chase the MA. Non-blocking; after combat
-    -- (don't move mid-fight) and before med (med skips while Navigation.Active).
-    move.tick(st)
-    -- DoWeMed (@1577): sit to recover when idle/out of combat (non-blocking; after combat so
-    -- combat takes priority and won't be interrupted by sitting).
-    med.tick(st)
+    -- Each module tick is isolated: util.guard pcalls it so a transient error in one module
+    -- (e.g. a bad TLO read mid-zone) can't stall the whole loop -- it logs once and continues.
+    -- Macro main-loop order: state -> move -> heal -> rez -> buff -> DPS.
+    util.guard('combat.refresh', combat.refresh, st)
+    util.guard('heal.tick', heal.tick, st)
+    if st.rez.auto ~= 0 then util.guard('rez.check', rez.check, st) end
+    util.guard('buff.run_mana', buff.run_mana, st)
+    util.guard('buff.tick', buff.tick, st)
+    util.guard('pet.tick', pet.tick, st)               -- summon/maintain pet (before buffing it)
+    util.guard('petbuff.tick', petbuff.tick, st)
+    util.guard('pull.tick', pull.tick, st)             -- runs before combat (drives pull movement)
+    util.guard('mez.tick', mez.tick, st)               -- CC adds before the DPS pass
+    util.guard('charm.tick', charm.tick, st)           -- (re)charm when petless (ENC/DRU)
+    util.guard('combat.debuff_all_tick', combat.debuff_all_tick, st)
+    util.guard('combat.tick', combat.tick, st)         -- assist + DPS/melee
+    util.guard('move.tick', move.tick, st)             -- RTC/chase (after combat, before med)
+    util.guard('med.tick', med.tick, st)               -- sit to recover when idle
     mq.delay(250)
   end
 

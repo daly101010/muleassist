@@ -58,15 +58,25 @@ function util.is_charmer() return util.CHARM_CLASSES[util.class_short()] ~= nil 
 -- Used to isolate per-module ticks and risky TLO chains so one failure can't stall the loop.
 ----------------------------------------------------------------------
 local seen_err = {}
+local function log_once(label, res)
+  if not seen_err[label] then
+    seen_err[label] = true
+    require('muleassist.Write').Error('%s: %s', tostring(label), tostring(res))
+  end
+end
+
 function util.safe(label, fn, default)
   local ok, res = pcall(fn)
   if ok then return res end
-  if not seen_err[label] then
-    seen_err[label] = true
-    local Write = require('muleassist.Write')
-    Write.Error('%s: %s', tostring(label), tostring(res))
-  end
+  log_once(label, res)
   return default
+end
+
+-- Like safe(), but pcalls fn(...) (no closure needed) and returns nothing. For the main loop:
+-- isolates each module tick so one module's error can't stall the whole bot.
+function util.guard(label, fn, ...)
+  local ok, res = pcall(fn, ...)
+  if not ok then log_once(label, res) end
 end
 
 return util
