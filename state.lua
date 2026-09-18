@@ -40,8 +40,11 @@ function state.apply_config(st, cfg)
   c.pet_assist_at  = cfg:num('Pet', 'PetAssistAt', 95)
   c.pet_combat_on  = cfg:bool('Pet', 'PetCombatOn', false)
   c.aggro_on       = cfg:bool('Aggro', 'AggroOn', false)
+  c.tank_all_mobs  = cfg:bool('Melee', 'TankAllMobs', false)
   c.burn_all_named = cfg:bool('Burn', 'BurnAllNamed', false)
   c.debuff_all_on = cfg:num('DPS', 'DebuffAllOn', 0)
+  c.target_switching_on = cfg:bool('Melee', 'TargetSwitchingOn', false)
+  c.manual_target_mode  = cfg:bool('Melee', 'ManualTargetMode', false)
 
   st.heal = st.heal or {}
   local h = st.heal
@@ -51,6 +54,8 @@ function state.apply_config(st, cfg)
   h.interrupt    = cfg:num('Heals', 'InterruptHeals', 100)
   h.duration_mod = cfg:num('General', 'DurationMod', 1)
   h.cond_on      = cfg:bool('General', 'ConditionsOn', true) and cfg:bool('Heals', 'HealsCOn', true)
+  h.cures_on     = cfg:num('Cures', 'CuresOn', 0)
+  h.cure_cond_on = cfg:bool('General', 'ConditionsOn', true)
 
   st.rez = st.rez or {}
   st.rez.auto     = cfg:num('Heals', 'AutoRezOn', 0)
@@ -92,6 +97,54 @@ function state.apply_config(st, cfg)
   st.med.on         = cfg:bool('General', 'MedOn', false)
   st.med.start      = cfg:num('General', 'MedStart', 90)
   st.med.sit_to_med = cfg:bool('General', 'SitToMed', false)
+
+  st.afk = st.afk or {}
+  local afk = st.afk
+  afk.on                 = cfg:num('AFKTools', 'AFKToolsOn', 0)
+  afk.gm_action          = cfg:num('AFKTools', 'AFKGMAction', 1)
+  afk.pc_radius          = cfg:num('AFKTools', 'AFKPCRadius', 500)
+  afk.camp_on_death      = cfg:bool('AFKTools', 'CampOnDeath', false)
+  afk.click_back_to_camp = cfg:bool('AFKTools', 'ClickBacktoCamp', false)
+  afk.beep_on_named      = cfg:bool('AFKTools', 'BeepOnNamed', false)
+
+  st.bard = st.bard or {}
+  local brd = st.bard
+  brd.twist_on       = cfg:bool('General', 'TwistOn', false)
+  brd.twist_med      = cfg:get('General', 'TwistMed', nil)
+  brd.twist_what     = cfg:get('General', 'TwistWhat', nil)
+  brd.twist_hold     = cfg:bool('General', 'TwistHold', false)
+  brd.melee_on       = cfg:num('Melee', 'MeleeTwistOn', 0)
+  brd.melee_what     = cfg:get('Melee', 'MeleeTwistWhat', nil)
+  brd.pull_twist_on  = cfg:bool('Pull', 'PullTwistOn', false)
+
+  st.merc = st.merc or {}
+  local mc = st.merc
+  mc.on          = cfg:bool('Merc', 'MercOn', false)
+  mc.assist_at   = cfg:num('Merc', 'MercAssistAt', 100)
+  mc.auto_revive = cfg:bool('Merc', 'AutoRevive', false)
+
+  st.loot = st.loot or {}
+  st.loot.on = cfg:bool('General', 'LootOn', false)
+
+  st.spellset = st.spellset or {}
+  st.spellset.load = cfg:num('SpellSet', 'LoadSpellSet', 0)
+  st.spellset.name = cfg:get('SpellSet', 'SpellSetName', 'MuleAssist')
+
+  st.autoclass = st.autoclass or {}
+  st.autoclass.on = cfg:bool('AutoClass', 'AutoClassOn', true)
+  st.autoclass.family = cfg:get('AutoClass', 'Family', 'Live')
+  st.autoclass.mode = cfg:get('AutoClass', 'Mode', 'Default')
+  st.autoclass.suggest_only = cfg:bool('AutoClass', 'SuggestOnly', true)
+  st.autoclass.fill_empty = cfg:bool('AutoClass', 'FillEmptyMySpells', true)
+  st.autoclass.fill_lists = cfg:bool('AutoClass', 'FillEmptyLists', true)
+  st.autoclass.class = cfg:get('AutoClassCache', 'Class', nil)
+  st.autoclass.level = cfg:num('AutoClassCache', 'Level', 0)
+
+  st.my_spells = st.my_spells or {}
+  for i = 1, 13 do
+    local v = cfg:get('MySpells', 'Gem' .. i, nil)
+    st.my_spells[i] = (v and v ~= '' and tostring(v):upper() ~= 'NULL') and v or nil
+  end
 
   st.mez = st.mez or {}
   local mz = st.mez
@@ -163,11 +216,14 @@ function state.new(cfg)
   -- runtime-only fields (set once; survive every apply_config/reapply)
   st.flags.buff_mode   = false
   st.flags.zombie_mode = false
+  st.flags.afk_hold    = false
 
   local c = st.combat
-  c.aggro_target_id = nil; c.hostile_count = 0; c.mob_count = 0
+  c.aggro_target_id = nil; c.hostile_count = 0; c.mob_count = 0; c.passive_mob_count = 0
   c.my_target_id = nil; c.my_target_name = nil; c.combat_start = nil
   c.attacking = nil; c.pulled = nil; c.chasing = nil; c.xtslot = 1
+  c.called_target_id = 0
+  c.wrangle_hold_target_id = 0; c.wrangle_hold_until = 0
   c.dps_timers = {}; c.entries = {}; c.debuffs = {}; c.aggro = {}
   c.burn = {}; c.burning = false; c.named_check = nil
   c.debuff_all = {}
@@ -175,11 +231,14 @@ function state.new(cfg)
   local h = st.heal
   h.single = {}; h.group = {}
   h.timers = {}; h.group_timers = {}; h.pet_timers = {}
+  h.cures = {}; h.cure_timers = {}; h.group_debuffs = {}
   h.single_point = 0
 
   st.rez.radius = 150; st.rez.battle_timers = {}; st.rez.ooc_timers = {}
 
   st.buff.entries = {}; st.buff.timers = {}; st.buff.oog_timers = {}; st.buff.read_deadline = 0
+  st.buff.peer_buffs_by_name = {}; st.buff.peer_buffs_by_id = {}; st.buff.peer_actor_misses = {}
+  st.buff.next_broadcast = 0
 
   st.pet.check_secs = 60; st.pet.check_deadline = 0; st.pet.entries = {}
   st.pet.summon_until = 0     -- os.clock() throttle between failed summon attempts
@@ -193,6 +252,21 @@ function state.new(cfg)
   st.move.chase_name = nil
 
   st.med.medding = false
+
+  st.afk.holding = false
+  st.afk.last_alert = 0
+  st.afk.last_named_alert = 0
+
+  st.bard.current_twist = nil
+  st.bard.twisting = false
+
+  st.merc.assisting = 0
+  st.merc.in_group = false
+  st.merc.name = nil
+
+  st.loot.last_check = 0
+
+  st.autoclass_rt = { queue = {}, startup_done = false }
 
   -- charm runtime (config-derived fields set by apply_config; survive reapply)
   st.charm.list       = nil  -- parsed by charm.setup: { {spell,min,max,mana}, ... }
@@ -219,6 +293,7 @@ function state.new(cfg)
   pl.chain_hold = false; pl.chain_active_until = 0; pl.chain_pause_until = 0; pl.dragging = 0
 
   st.pending_reapply = false   -- set by /mareload or the UI; consumed in init.lua's loop
+  st.pending_ui_reload = false -- set when code writes the INI while embedded MAUI is open
 
   return st
 end

@@ -3,11 +3,15 @@
 -- live client live separately and are added to this list during Phase 1.
 local mods = {
   'muleassist.tests.test_config',
+  'muleassist.tests.test_autoclass',
+  'muleassist.tests.test_action',
+  'muleassist.tests.test_diagnostics',
   'muleassist.tests.test_util',
   'muleassist.tests.test_state',
   'muleassist.tests.test_cond',
   'muleassist.tests.test_cond_model',
   'muleassist.tests.test_heal',
+  'muleassist.tests.test_comms',
   'muleassist.tests.test_cast_mem',
   'muleassist.tests.test_buff',
   'muleassist.tests.test_petbuff',
@@ -20,6 +24,7 @@ local mods = {
   'muleassist.tests.test_charm',
   'muleassist.tests.test_binds',
   'muleassist.tests.test_events',
+  'muleassist.tests.test_runtime_modules',
 }
 
 local ok_all = true
@@ -34,3 +39,4 @@ for _, name in ipairs(mods) do
 end
 
 print(ok_all and 'ALL TESTS PASS' or 'TESTS FAILED')
+return ok_all

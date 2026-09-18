@@ -5,6 +5,7 @@
 -- this is the CORE engine sufficient for the self-buff milestone.
 local mq    = require('mq')
 local Write = require('muleassist.Write')
+local util  = require('muleassist.util')
 local cast  = {}
 
 -- AA used to unstick frozen spell gems (General/GemStuckAbility in the INI).
@@ -25,6 +26,94 @@ cast.remem_cast        = 0
 cast.remem_cast_lw     = 0
 
 local function spell(name) return mq.TLO.Spell(name) end
+local mqbool = util.mqbool
+
+function cast.is_command(what)
+  return type(what) == 'string' and what:lower():find('^%s*command:') ~= nil
+end
+
+local function command_body(what)
+  return (what:gsub('^%s*[Cc][Oo][Mm][Mm][Aa][Nn][Dd]:%s*', '', 1))
+end
+
+local function target_for_cast(what, target_id)
+  local tt = spell(what).TargetType()
+  if target_id and target_id ~= 0 and mq.TLO.Target.ID() ~= target_id and tt ~= 'Self'
+     and (mq.TLO.Spawn('id ' .. tostring(target_id)).ID() or 0) ~= 0 then
+    local self_group = (target_id == mq.TLO.Me.ID()) and mqbool(spell(what).HasSPA(0)())
+                       and (tt or ''):lower():find('group')
+    if not self_group then
+      mq.cmdf('/target id %d', target_id)
+      mq.delay(1000, function() return mq.TLO.Target.ID() == target_id end)
+    end
+  end
+end
+
+local function has_item(name)
+  return (mq.TLO.FindItem('=' .. name).ID() or 0) ~= 0
+      or mqbool(mq.TLO.Me.ItemReady('=' .. name)())
+      or mqbool(mq.TLO.Me.ItemReady(name)())
+end
+
+function cast.ready(what)
+  if not what or what == '' then return false end
+  if cast.is_command(what) then return true end
+  local rank = spell(what).RankName() or what
+  return mqbool(mq.TLO.Me.SpellReady(rank)())
+      or mqbool(mq.TLO.Me.AltAbilityReady(what)())
+      or mqbool(mq.TLO.Me.CombatAbilityReady(rank)())
+      or mqbool(mq.TLO.Me.AbilityReady(what)())
+      or mqbool(mq.TLO.Me.ItemReady('=' .. what)())
+      or mqbool(mq.TLO.Me.ItemReady(what)())
+      or ((tonumber(mq.TLO.Me.Book(what)()) or 0) > 0)
+end
+
+local function cast_aa(name, sent_from, target_id)
+  local id = mq.TLO.Me.AltAbility(name).ID() or 0
+  if id == 0 then return nil end
+  if not mqbool(mq.TLO.Me.AltAbilityReady(name)()) then return 'CAST_NOT_READY' end
+  target_for_cast(name, target_id)
+  mq.cmdf('/alt act %d', id)
+  mq.delay(100)
+  return cast.wait_cast(sent_from, spell(name).MyCastTime() or 0, name)
+end
+
+local function cast_disc(name, sent_from, target_id)
+  local rank = spell(name).RankName() or name
+  local ca_name = mq.TLO.Me.CombatAbility(name)()
+  local ca_rank = mq.TLO.Me.CombatAbility(rank)()
+  local function known_ca(v)
+    return v ~= nil and v ~= '' and tostring(v):upper() ~= 'NULL' and tostring(v):upper() ~= 'FALSE'
+  end
+  local known = known_ca(ca_name) or known_ca(ca_rank)
+  if not known then return nil end
+  if not mqbool(mq.TLO.Me.CombatAbilityReady(rank)()) then return 'CAST_NOT_READY' end
+  target_for_cast(name, target_id)
+  mq.cmdf('/disc "%s"', name)
+  mq.delay(100)
+  return cast.wait_cast(sent_from, spell(name).MyCastTime() or 0, name)
+end
+
+local function cast_item(name, sent_from, target_id)
+  if not has_item(name) then return nil end
+  if not (mqbool(mq.TLO.Me.ItemReady('=' .. name)()) or mqbool(mq.TLO.Me.ItemReady(name)())) then
+    return 'CAST_NOT_READY'
+  end
+  target_for_cast(name, target_id)
+  mq.cmdf('/useitem "%s"', name)
+  mq.delay(100)
+  local item_spell = mq.TLO.FindItem('=' .. name).Spell()
+  local wait_name = (item_spell and item_spell ~= '') and item_spell or name
+  return cast.wait_cast(sent_from, spell(wait_name).MyCastTime() or 0, wait_name)
+end
+
+local function cast_skill(name, sent_from)
+  if (mq.TLO.Me.Skill(name)() or 0) <= 0 then return nil end
+  if not mqbool(mq.TLO.Me.AbilityReady(name)()) then return 'CAST_NOT_READY' end
+  mq.cmdf('/doability "%s"', name)
+  mq.delay(1000, function() return not mqbool(mq.TLO.Me.AbilityReady(name)()) end)
+  return 'CAST_SUCCESS'
+end
 
 -- Sub IsDisc @4646: a skill-based, lasting ability that doesn't stack with discs
 -- (i.e. one that occupies the Combat Ability window).
@@ -125,7 +214,16 @@ end
 
 -- Sub Cast @5275: rank-downgrade, conditional target, gem-ready wait, cast-retry loop.
 function cast.cast(what, sent_from, target_id)
+  if not what or what == '' then return 'CAST_INVALID' end
   Write.Debug('Cast: %s (%s)', what, tostring(sent_from))
+
+  if cast.is_command(what) then
+    local cmd = command_body(what)
+    if cmd == '' then return 'CAST_INVALID' end
+    mq.cmd('/docommand ' .. cmd)
+    mq.delay(250)
+    return 'CAST_SUCCESS'
+  end
 
   -- Rank downgrade when SpellRankCap is low (lines 5278-5284).
   if what:find('Rk%.') and (mq.TLO.Me.SpellRankCap() or 3) < 3 then
@@ -137,17 +235,15 @@ function cast.cast(what, sent_from, target_id)
     end
   end
 
+  local direct = cast_aa(what, sent_from, target_id)
+  if direct then return direct end
+  direct = cast_disc(what, sent_from, target_id)
+  if direct then return direct end
+  direct = cast_skill(what, sent_from)
+  if direct then return direct end
+
   -- Conditional targeting (lines 5285-5300).
-  local tt = spell(what).TargetType()
-  if target_id and mq.TLO.Target.ID() ~= target_id and tt ~= 'Self'
-     and mq.TLO.Spawn('id ' .. tostring(target_id)).ID() then
-    local self_group = (target_id == mq.TLO.Me.ID()) and spell(what).HasSPA(0)()
-                       and (tt or ''):lower():find('group')
-    if not self_group then
-      mq.cmdf('/target id %d', target_id)
-      mq.delay(1000, function() return mq.TLO.Target.ID() == target_id end)
-    end
-  end
+  target_for_cast(what, target_id)
 
   -- Spell memorization swap (CastWhat @5092-5137). Only real spellbook spells can be
   -- memmed; AAs/items/skills fall through untouched (Sub Cast then /casts them as-is).
@@ -180,6 +276,10 @@ function cast.cast(what, sent_from, target_id)
 
   -- Gem-ready wait (lines 5301-5302).
   mq.delay(2000, function() return mq.TLO.Me.SpellReady(what)() end)
+  if not mq.TLO.Me.SpellReady(what)() and not mq.TLO.Me.Book(what)() then
+    direct = cast_item(what, sent_from, target_id)
+    if direct then return direct end
+  end
   if not mq.TLO.Me.SpellReady(what)() and mq.TLO.Me.CombatState() == 'COMBAT' then return end
 
   -- Cast retry loop (lines 5303-5312): re-issue if the gem is up but we didn't start casting.

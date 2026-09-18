@@ -15,6 +15,10 @@ local pull    = require('muleassist.pull')
 local pet     = require('muleassist.pet')
 local mez     = require('muleassist.mez')
 local charm   = require('muleassist.charm')
+local afk     = require('muleassist.afk')
+local bard    = require('muleassist.bard')
+local merc    = require('muleassist.merc')
+local loot    = require('muleassist.loot')
 
 local settings = {}
 
@@ -39,6 +43,7 @@ local function apply_all(st, cfg)
   end
   heal.setup(st); buff.setup(st); petbuff.setup(st); combat.setup(st)
   pull.setup(st); pet.setup(st); mez.setup(st); charm.setup(st)
+  afk.setup(st); bard.setup(st); merc.setup(st); loot.setup(st)
 end
 
 function settings.reapply(st)
@@ -66,12 +71,40 @@ end
 -- Used by the bind layer (changevarint/togglevariable). Returns the new value, or nil on error.
 function settings.set(st, section, key, value)
   local cfg = st.cfg
+  local old_cfg = st.cfg
+  local old_section = cfg.sections[section]
+  local had_key = old_section and old_section[key] ~= nil
+  local old_value = had_key and old_section[key] or nil
+  local old_lists = cfg._lists
   cfg.sections[section] = cfg.sections[section] or {}
   cfg.sections[section][key] = tostring(value)
   cfg._lists = {}                                  -- invalidate list cache for re-derive
   local ok, e = pcall(apply_all, st, cfg)
-  if not ok then Write.Error('settings.set: %s', tostring(e)); return nil end
-  pcall(config.save, cfg)                          -- persist (normalizes INI ordering)
+  if not ok then
+    Write.Error('settings.set: %s (rolling back)', tostring(e))
+    if old_section then
+      cfg.sections[section] = old_section
+      if had_key then old_section[key] = old_value else old_section[key] = nil end
+    else
+      cfg.sections[section] = nil
+    end
+    cfg._lists = old_lists or {}
+    if old_cfg then pcall(apply_all, st, old_cfg) end
+    return nil
+  end
+  local saved, save_err = config.save(cfg)          -- persist (normalizes INI ordering)
+  if not saved then
+    Write.Error('settings.set: save failed (%s)', tostring(save_err))
+    if old_section then
+      cfg.sections[section] = old_section
+      if had_key then old_section[key] = old_value else old_section[key] = nil end
+    else
+      cfg.sections[section] = nil
+    end
+    cfg._lists = old_lists or {}
+    if old_cfg then pcall(apply_all, st, old_cfg) end
+    return nil
+  end
   return cfg:get(section, key)
 end
 

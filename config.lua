@@ -94,6 +94,86 @@ function config.load(path)
   return setmetatable({ path=path, sections=sections, _lists={} }, cfg_mt)
 end
 
+local function default_sections(opts)
+  opts = opts or {}
+  local raw_role = opts.role and tostring(opts.role) or ''
+  local role = (raw_role ~= '' and raw_role:lower() ~= 'none') and raw_role or 'Assist'
+  local class = opts.class and opts.class ~= '' and opts.class or 'Unknown'
+  local level = tonumber(opts.level) or 0
+  return {
+    General = {
+      Role = role,
+      MainAssist = opts.main_assist or '',
+      CharInfo = string.format('%s|%d|GOLD', class, level),
+      CampRadius = 60,
+      CampRadiusExceed = 400,
+      ReturnToCamp = 0,
+      ReturnToCampAccuracy = 10,
+      ChaseAssist = 0,
+      ChaseDistance = 25,
+      MedOn = 1,
+      MedStart = 20,
+      SitToMed = 1,
+      ConditionsOn = 1,
+      BuffWhileChasing = 1,
+      MiscGem = 8,
+      MiscGemLW = 0,
+      MiscGemRemem = 1,
+      GemStuckAbility = 'NULL',
+      EQBCOn = 0,
+      DanNetOn = 0,
+      LootOn = 0,
+      TwistOn = 0,
+      TwistHold = 0,
+    },
+    Melee = {
+      AssistAt = 95,
+      MeleeOn = 0,
+      MeleeDistance = 30,
+      FaceMobOn = 1,
+      StickHow = 'snaproll rear',
+      TargetSwitchingOn = 0,
+      ManualTargetMode = 0,
+      TankAllMobs = 0,
+      MeleeTwistOn = 0,
+    },
+    DPS = { DPSOn = 0, DPSSize = 0, DPSCOn = 1, DPSInterval = 2, DPSSkip = 1, DebuffAllOn = 0 },
+    Heals = { HealsOn = 0, HealsSize = 0, HealsCOn = 1, AutoRezOn = 0, AutoRezWith = 'NULL', HealGroupPetsOn = 0, InterruptHeals = 100, XTarHeal = 0 },
+    Buffs = { BuffsOn = 0, BuffsSize = 0, BuffsCOn = 1, CheckBuffsTimer = 10, RebuffOn = 1, PowerSource = 'NULL' },
+    Burn = { BurnAllNamed = 0, BurnCOn = 0, BurnSize = 0, UseTribute = 0, BurnText = 'Burn this' },
+    Mez = { MezOn = 0, MezRadius = 50, MezMinLevel = 0, MezMaxLevel = 200, MezStopHPs = 80, MezSpell = 'NULL', MezAESpell = 'NULL|0' },
+    AE = { AEOn = 0, AERadius = 50, AESize = 0 },
+    OhShit = { OhShitOn = 0, OhShitSize = 0, OhShitCOn = 1 },
+    Pet = { PetOn = 0, PetSpell = 'NULL', PetBuffsOn = 0, PetBuffsSize = 0, PetCombatOn = 0, PetAssistAt = 95, PetHoldOn = 1, PetShrinkOn = 0, PetShrinkSpell = 'Tiny Companion' },
+    Charm = { CharmOn = 0, CharmSize = 0, CharmStunOn = 1, CharmRetashOn = 1, CharmAutoOn = 0, CharmMaxFails = 3 },
+    Pull = { PullWith = 'Melee', MaxRadius = 350, MaxZRange = 50, PullWait = 5, PullCond = 'TRUE', PullLevel = '0|0', ChainPull = 0, ChainPullHP = 90, ChainPullPause = '0' },
+    Aggro = { AggroOn = 0, AggroSize = 0, AggroCOn = 1 },
+    Bandolier = { BandolierOn = 0, BandolierSize = 0, BandolierCOn = 1, BandolierPull = 'NULL' },
+    Cures = { CuresOn = 0, CuresSize = 0 },
+    GoM = { GoMOn = 0, GoMSize = 0, GoMCOn = 1 },
+    Merc = { MercOn = 0, MercAssistAt = 100, AutoRevive = 0 },
+    AFKTools = { AFKToolsOn = 0, AFKGMAction = 1, AFKPCRadius = 500, BeepOnNamed = 0, CampOnDeath = 0, ClickBacktoCamp = 0 },
+    GMail = { GMailOn = 0, GMailSize = 0 },
+    SpellSet = { LoadSpellSet = 2, SpellSetName = 'MuleAssist' },
+    MySpells = {},
+    AutoClass = { AutoClassOn = 1, Family = 'Live', Mode = 'Default', SuggestOnly = 1, FillEmptyMySpells = 1, FillEmptyLists = 1 },
+    AutoClassCache = { Family = 'Live', Class = '', Level = tostring(level), Mode = 'Default', LastScan = '', GemCount = 0 },
+  }
+end
+
+function config.default(opts)
+  return setmetatable({ path = opts and opts.path or nil, sections = default_sections(opts), _lists = {} }, cfg_mt)
+end
+
+function config.create_default(path, opts)
+  opts = opts or {}
+  opts.path = path
+  local cfg = config.default(opts)
+  local ok, err = config.save(cfg)
+  if not ok then return nil, err end
+  return cfg
+end
+
 -- Build the INI filename(s). Returns primary and (optional) legacy _<level> filename.
 function config.locate(server, char, level)
   local base = string.format('MuleAssist_%s_%s', server, char)

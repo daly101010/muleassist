@@ -3,6 +3,7 @@ local mq = require('mq')
 local globals = require('muleassist.ui.globals')
 local utils = require('muleassist.ui.utils')
 local LIP = require('muleassist.ui.lib.LIP')
+local diagnostics = require('muleassist.diagnostics')
 
 local TABLE_FLAGS = bit32.bor(ImGuiTableFlags.Hideable, ImGuiTableFlags.RowBg, ImGuiTableFlags.ScrollY, ImGuiTableFlags.BordersOuter)
 local LEMONS_INFO_INI = mq.configDir..'/Lemons_Info.ini'
@@ -262,8 +263,100 @@ local function DrawThemeMenu()
     end
 end
 
+local function fmt_bool(v)
+    return v and 'on' or 'off'
+end
+
+local function fmt_secs(v)
+    v = tonumber(v) or 0
+    if v <= 0 then return '' end
+    return string.format('%.1fs', v)
+end
+
+local function status_color(row)
+    if row.blocked_by == 'ready' then return 0, 1, 0, 1 end
+    if row.blocked_by == 'timer' then return 1, 1, 0, 1 end
+    return 1, 0.35, 0.25, 1
+end
+
+local function DrawDiagnostics()
+    local st = globals.Runtime
+    if not st then
+        ImGui.TextColored(1, 1, 0, 1, 'Diagnostics are available when MAUI is opened from the running MuleAssist script.')
+        return
+    end
+
+    local summary = diagnostics.combat_summary(st)
+    if ImGui.BeginTable('RuntimeSummary', 4, TABLE_FLAGS, 0, 110, 0.0) then
+        ImGui.TableSetupColumn('Field', 0, 120, 1)
+        ImGui.TableSetupColumn('Value', 0, 160, 2)
+        ImGui.TableSetupColumn('Field', 0, 140, 1)
+        ImGui.TableSetupColumn('Value', 0, 160, 2)
+        ImGui.TableHeadersRow()
+
+        local rows = {
+            { 'Role', summary.role, 'Main Assist', string.format('%s (%s)', summary.main_assist, summary.main_assist_id) },
+            { 'Target', string.format('%s %s', summary.my_target_name or '', summary.my_target_id or 0), 'Called Target', tostring(summary.called_target_id) },
+            { 'Melee', fmt_bool(summary.melee_on), 'DPS', fmt_bool(summary.dps_on) },
+            { 'Aggro', fmt_bool(summary.aggro_on), 'Tank All Mobs', fmt_bool(summary.tank_all_mobs) },
+            { 'Hostiles', tostring(summary.hostile_count), 'Mobs', tostring(summary.mob_count) },
+            { 'Peer Buff Cache', tostring(summary.peer_buff_count), 'Wrangle Hold', fmt_secs(summary.wrangle_hold_remaining) },
+        }
+        for i, row in ipairs(rows) do
+            ImGui.PushID('summary'..i)
+            ImGui.TableNextRow()
+            for col = 1, 4 do
+                ImGui.TableNextColumn()
+                ImGui.Text(tostring(row[col] or ''))
+            end
+            ImGui.PopID()
+        end
+        ImGui.EndTable()
+    end
+
+    local action_rows = diagnostics.action_rows(st)
+    if ImGui.BeginTable('ActionDiagnostics', 9, TABLE_FLAGS, 0, 0, 0.0) then
+        ImGui.TableSetupColumn('List', 0, 72, 1)
+        ImGui.TableSetupColumn('#', 0, 28, 1)
+        ImGui.TableSetupColumn('Action', 0, 190, 3)
+        ImGui.TableSetupColumn('Type', 0, 70, 1)
+        ImGui.TableSetupColumn('Ready', 0, 70, 1)
+        ImGui.TableSetupColumn('Blocked By', 0, 100, 1)
+        ImGui.TableSetupColumn('Timer', 0, 65, 1)
+        ImGui.TableSetupColumn('Condition', 0, 85, 1)
+        ImGui.TableSetupColumn('Last Result', 0, 130, 2)
+        ImGui.TableSetupScrollFreeze(0, 1)
+        ImGui.TableHeadersRow()
+        for i, row in ipairs(action_rows) do
+            ImGui.PushID('actiondiag'..i..row.kind..row.index)
+            ImGui.TableNextRow()
+            ImGui.TableNextColumn(); ImGui.Text(row.kind)
+            ImGui.TableNextColumn(); ImGui.Text(tostring(row.index or ''))
+            ImGui.TableNextColumn(); ImGui.Text(row.spell or '')
+            ImGui.TableNextColumn(); ImGui.Text(row.action_type or '')
+            ImGui.TableNextColumn()
+            local r, g, b, a = status_color(row)
+            ImGui.TextColored(r, g, b, a, row.ready and 'ready' or 'blocked')
+            ImGui.TableNextColumn(); ImGui.Text(row.blocked_by or '')
+            ImGui.TableNextColumn(); ImGui.Text(fmt_secs(row.timer_remaining))
+            ImGui.TableNextColumn(); ImGui.Text(row.condition_state or '')
+            ImGui.TableNextColumn(); ImGui.Text(row.last_result or '')
+            if row.condition and row.condition ~= '' and ImGui.IsItemHovered() then
+                ImGui.BeginTooltip()
+                ImGui.PushTextWrapPos(520)
+                ImGui.TextUnformatted(row.condition)
+                ImGui.PopTextWrapPos()
+                ImGui.EndTooltip()
+            end
+            ImGui.PopID()
+        end
+        ImGui.EndTable()
+    end
+end
+
 -- Define this down here since the functions need to be defined first
 local customSections = {
+    ['Diagnostics']=DrawDiagnostics,
     ['Raw INI']=DrawRawINIEditTab,
     ['Shared Lists']=DrawListsTab,
     ['Debug']=DrawDebugTab,

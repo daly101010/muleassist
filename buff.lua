@@ -17,6 +17,7 @@ local MELEE  = { BRD=1,BER=1,BST=1,MNK=1,PAL=1,ROG=1,RNG=1,SHD=1,WAR=1 }
 -- pass rather than entering cast.cast and waiting for the gem/AA to refresh. Un-memmed spells
 -- pass (Phase 2c will mem them); a memmed spell must be gem-ready; AAs/items use their timers.
 local function buff_ready(name, bufftype)
+  if bufftype == 'command' then return true end
   if bufftype == 'aa'   then return util.mqbool(mq.TLO.Me.AltAbilityReady(name)()) end
   if bufftype == 'item' then return util.mqbool(mq.TLO.Me.ItemReady('=' .. name)()) end
   if mq.TLO.Me.Gem(name)() then return util.mqbool(mq.TLO.Me.SpellReady(name)()) end
@@ -24,42 +25,50 @@ local function buff_ready(name, bufftype)
 end
 
 ----------------------------------------------------------------------
--- DanNet peer queries. Targeting only exposes a PARTIAL buff list for other PCs, so local
--- StacksSpawn/StacksTarget are blind to a group member's blocking buffs. Instead ask the
--- peer to evaluate the decision against ITS OWN complete buff list (idiom from MQ2DanNet
--- helpers: /dquery then read DanNet[peer].Q[query] once .Received() > 0).
+-- Actor peer buff checks. Targeting only exposes a PARTIAL buff list for other PCs, so
+-- local StacksSpawn/StacksTarget are blind to blocking buffs. MuleAssist peers broadcast
+-- a lightweight buff/song snapshot and can answer an exact stacks query from their own
+-- complete buff list. Non-MuleAssist targets still fall back to the local target cache.
 ----------------------------------------------------------------------
--- Is `name` a connected DanNet peer? Peers() is a '|'-delimited, lowercased list (the
--- existence idiom rgmercs uses); DanNet(peer)() alone returns nil even for valid peers.
-local function dnet_is_peer(name)
-  if not name or name == '' then return false end
-  return ((mq.TLO.DanNet.Peers() or '') .. '|'):lower():find(name:lower() .. '|', 1, true) ~= nil
+local function cache_key(name)
+  return (name and name ~= '') and name:lower() or nil
 end
 
--- Returns (value, received). received=false means not a peer / no answer -> caller falls back.
-local function dnet_raw(peer, query, timeout)
-  if not dnet_is_peer(peer) then return nil, false end
-  mq.cmdf('/dquery %s -q "%s"', peer, query)
-  mq.delay(25)
-  mq.delay(timeout or 1000, function() return (mq.TLO.DanNet(peer).Q(query).Received() or 0) > 0 end)
-  local received = (mq.TLO.DanNet(peer).Q(query).Received() or 0) > 0
-  return mq.TLO.DanNet(peer).Q(query)(), received
+local function cached_peer_duration(st, peer, spell)
+  if not st or not st.buff or not st.buff.peer_buffs_by_name then return nil end
+  local peer_key = cache_key(peer)
+  local spell_key = cache_key(spell)
+  if not peer_key or not spell_key then return nil end
+  local entry = st.buff.peer_buffs_by_name[peer_key]
+  if not entry or os.clock() - (entry.updated or 0) > 30 then return nil end
+  return math.max(
+    tonumber((entry.buffs or {})[spell_key]) or 0,
+    tonumber((entry.songs or {})[spell_key]) or 0
+  )
 end
 
--- Decide whether to buff a peer with `spell`, using the peer's own view:
+-- Decide whether to buff a MuleAssist peer with `spell`, using the peer's own view:
 --   'skip'  -> already has it (>30s) OR it won't stack (blocked by another buff)
 --   'cast'  -> missing/expiring AND it will stack
---   nil     -> not a DanNet peer / no answer -> caller uses local checks
+--   nil     -> no MuleAssist actor answer -> caller uses local checks
 local function peer_buff_decision(st, peer, spell)
-  -- Use DanNet whenever the member is a reachable peer -- independent of MuleAssist's own
-  -- DanNetOn toggle (that gates other features; stacking accuracy should always use it).
-  if not dnet_is_peer(peer) then return nil end
-  local dur, ok = dnet_raw(peer, 'Me.Buff[' .. spell .. '].Duration.TotalSeconds', 1000)
-  if not ok then return nil end
-  if dur and tonumber(dur) and tonumber(dur) > 30 then return 'skip' end  -- still buffed
-  local stk, ok2 = dnet_raw(peer, 'Spell[' .. spell .. '].Stacks', 1000)
-  if not ok2 then return nil end
-  return util.mqbool(stk) and 'cast' or 'skip'
+  local cached_duration = cached_peer_duration(st, peer, spell)
+  if cached_duration and cached_duration > 30 then return 'skip' end
+  local peer_key = cache_key(peer)
+  local misses = st and st.buff and st.buff.peer_actor_misses
+  if peer_key and misses and (misses[peer_key] or 0) > os.clock() then return nil end
+  if not st or not st.comms or not st.comms.buff_decision then return nil end
+  local decision = st.comms.buff_decision(peer, spell, 500)
+  if not decision then
+    if peer_key then
+      st.buff.peer_actor_misses = st.buff.peer_actor_misses or {}
+      st.buff.peer_actor_misses[peer_key] = os.clock() + 30
+    end
+    return nil
+  end
+  if peer_key and misses then misses[peer_key] = nil end
+  if (tonumber(decision.duration) or 0) > 30 then return 'skip' end
+  return decision.stacks and 'cast' or 'skip'
 end
 
 -- Indirection so categorization is testable offline (overridden in tests).
@@ -94,6 +103,25 @@ local function arm(st, i, who, name)
   local secs = (mq.TLO.Spell(name).Duration.TotalSeconds() or 0) * (st.buff.duration_mod or 1)
   st.buff.timers[i][who] = os.clock() + secs
 end
+local function arm_seconds(st, i, who, secs)
+  st.buff.timers[i] = st.buff.timers[i] or {}
+  st.buff.timers[i][who] = os.clock() + secs
+end
+
+local function in_combat(st)
+  return st.combat.aggro_target_id ~= nil or mq.TLO.Me.CombatState() == 'COMBAT'
+end
+
+local function combat_ok(st, en)
+  return (not in_combat(st)) or st.flags.buff_mode or en.cast_in_combat
+end
+
+local function has_combat_buffs(st)
+  for _, en in ipairs(st.buff.entries or {}) do
+    if en.cast_in_combat then return true end
+  end
+  return false
+end
 
 ----------------------------------------------------------------------
 -- setup: parse + categorize st.lists.buffs into st.buff.entries
@@ -105,7 +133,8 @@ function buff.setup(st)
     if raw_name ~= '' and raw_name:lower() ~= 'null' then
       local entry = serialize.parse_buff(e.raw, e.cond)
       entry.index     = e.index
-      entry.cast_name = entry.name   -- buff.lua casts by cast_name
+      entry.cast_name = (entry.prefix == 'command') and ('command:' .. entry.name) or entry.name
+      entry.bufftype  = (entry.prefix == 'command') and 'command' or nil
       out[#out + 1] = entry
     end
   end
@@ -113,8 +142,67 @@ function buff.setup(st)
   Write.Info('buff.setup: %d buff entries', #out)
 end
 
--- Stub: KissAssist cross-character INI coordination is Phase 3b.
-function buff.write_buffs(st) end
+local function safe_call(fn, default)
+  local ok, value = pcall(fn)
+  if ok then return value end
+  return default
+end
+
+local function duration_seconds(obj)
+  if not obj then return 0 end
+  local total = safe_call(function() return obj.Duration.TotalSeconds() end)
+  if tonumber(total) then return tonumber(total) end
+  total = safe_call(function() return obj.Duration() end)
+  return tonumber(total) or 0
+end
+
+local function add_snapshot_buff(out, obj)
+  if not obj then return end
+  local id = tonumber(safe_call(function() return obj.ID() end)) or 0
+  if id <= 0 then return end
+  local name = safe_call(function() return obj.Name() end)
+  if not name or name == '' or name == 'NULL' then return end
+  local key = name:lower()
+  out[key] = math.max(out[key] or 0, duration_seconds(obj))
+end
+
+local function self_buff_snapshot()
+  local buffs, songs, pet_buffs, pet_blocked = {}, {}, {}, {}
+  for i = 1, 42 do
+    add_snapshot_buff(buffs, safe_call(function() return mq.TLO.Me.Buff(i) end))
+  end
+  for i = 1, 30 do
+    add_snapshot_buff(songs, safe_call(function() return mq.TLO.Me.Song(i) end))
+  end
+  for i = 1, 30 do
+    add_snapshot_buff(pet_buffs, safe_call(function() return mq.TLO.Me.Pet.Buff(i) end))
+  end
+  for i = 1, 40 do
+    local blocked = safe_call(function() return mq.TLO.Me.BlockedPetBuff(i) end)
+    add_snapshot_buff(pet_blocked, blocked)
+  end
+  return {
+    spawn_id = mq.TLO.Me.ID() or 0,
+    name = mq.TLO.Me.CleanName() or '',
+    class = mq.TLO.Me.Class.ShortName() or '',
+    level = mq.TLO.Me.Level() or 0,
+    zone_id = mq.TLO.Zone.ID() or 0,
+    instance_id = mq.TLO.Me.Instance() or 0,
+    buffs = buffs,
+    songs = songs,
+    blocked = {},
+    pet_buffs = pet_buffs,
+    pet_blocked = pet_blocked,
+  }
+end
+
+function buff.write_buffs(st, force)
+  if not st or not st.comms or not st.comms.broadcast_buffs then return end
+  st.buff.next_broadcast = st.buff.next_broadcast or 0
+  if not force and os.clock() < st.buff.next_broadcast then return end
+  st.buff.next_broadcast = os.clock() + 2
+  st.comms.broadcast_buffs(st, self_buff_snapshot())
+end
 
 ----------------------------------------------------------------------
 -- CacheBuffs: target a spawn and wait for its buff window to populate so CachedBuff reads
@@ -154,8 +242,7 @@ function buff.check_group(st, en, spell_to_cast, buff_sub, spell_range)
   for j = 0, gn do
     -- combat abort (macro re-runs GetHostilesOnXTarget per member); CombatState fallback
     -- until Phase 4 supplies aggro_target_id. BuffMode overrides.
-    if (st.combat.aggro_target_id ~= nil or mq.TLO.Me.CombatState() == 'COMBAT')
-       and not st.flags.buff_mode then return false end
+    if in_combat(st) and not combat_ok(st, en) then return false end
     local gm = mq.TLO.Group.Member(j)
     local id = gm.ID()
     local nm = gm.CleanName() or ('m' .. j)
@@ -176,7 +263,7 @@ function buff.check_group(st, en, spell_to_cast, buff_sub, spell_range)
         if mq.TLO.Me.Buff(sb).ID() or mq.TLO.Me.Song(sb).ID() then break end
         if not util.mqbool(mq.TLO.Spell(sb).Stacks()) then break end
       else
-        -- Authoritative stacking via the peer's own buff list (DanNet); fall back to the
+        -- Authoritative stacking via the peer's own MuleAssist buff list; fall back to the
         -- partial local view only when the member isn't a reachable peer.
         local decision = peer_buff_decision(st, nm, sb)
         if decision ~= nil then
@@ -205,7 +292,7 @@ function buff.check_group(st, en, spell_to_cast, buff_sub, spell_range)
         mq.delay(3000, function() return mq.TLO.Target.BuffsPopulated() end)
         mq.delay(3000, function() return (mq.TLO.Target.CachedBuffCount() or -1) ~= -1 end)
       end
-      -- Stacking authority is pass-1 (DanNet peer query for grouped PCs). Here we only confirm
+      -- Stacking authority is pass-1 (actor peer query for grouped PCs). Here we only confirm
       -- we successfully targeted them and they don't already show the buff locally.
       if mq.TLO.Target.ID() == id and not mq.TLO.Target.Buff(sb).ID() then
         mq.delay(3000, function() return not mq.TLO.Me.SpellInCooldown() end)
@@ -215,7 +302,7 @@ function buff.check_group(st, en, spell_to_cast, buff_sub, spell_range)
         if cast.cast(spell_to_cast, 'Buffs-nomem', id) == 'CAST_SUCCESS' then
           Write.Info('Buffed %s on %s', spell_to_cast, gm.CleanName() or ('member ' .. j))
           arm(st, en.index, j, en.check_name)
-          buff.write_buffs(st)
+          buff.write_buffs(st, true)
           if (mq.TLO.Spell(spell_to_cast).TargetType() or ''):find('Group v') then return true end
           if util.group_size() == j then return true end
         end
@@ -236,7 +323,7 @@ function buff.check_ma(st, en, spell_range)
   if not buff_ready(en.check_name, en.bufftype) then return end
   local sb = silver(en.check_name)
   if st.buff.cond_on and en.cond and en.cond ~= '' and not cond.eval(en.cond) then return end
-  -- Authoritative stacking via the MA's own buff list when it's a DanNet peer.
+  -- Authoritative stacking via the MA's own buff list when it's a MuleAssist peer.
   local decision = peer_buff_decision(st, ma, sb)
   if decision ~= nil then
     if decision == 'skip' then return end
@@ -249,7 +336,7 @@ function buff.check_ma(st, en, spell_range)
   if cast.cast(en.check_name, 'Buffs-nomem', mat_id) == 'CAST_SUCCESS' then
     Write.Info('Buffed %s on >> MA %s <<', en.check_name, ma)
     arm(st, en.index, 7, en.check_name)
-    buff.write_buffs(st)
+    buff.write_buffs(st, true)
   end
 end
 
@@ -257,6 +344,7 @@ end
 -- Sub CheckBuffs self path @7186-7258 (no-group / Me-tag fallback).
 ----------------------------------------------------------------------
 function buff.check_self(st, en)
+  if not class_ok(en, mq.TLO.Me.Class.ShortName() or '') then return end
   local sb = silver(en.check_name)
   if not buff_ready(en.check_name, en.bufftype) then return end
   if mq.TLO.Me.Buff(sb).ID() or mq.TLO.Me.Song(sb).ID() then return end
@@ -269,7 +357,7 @@ function buff.check_self(st, en)
   if cast.cast(en.check_name, 'Buffs-nomem', mq.TLO.Me.ID()) == 'CAST_SUCCESS' then
     Write.Info('Buffed %s on Me', en.check_name)
     arm(st, en.index, 0, en.check_name)
-    buff.write_buffs(st)
+    buff.write_buffs(st, true)
   end
 end
 
@@ -282,7 +370,7 @@ local REGEN_MANA = { BRD=1,BST=1,CLR=1,DRU=1,ENC=1,MAG=1,NEC=1,PAL=1,RNG=1,SHD=1
 -- stat: 'Mana' | 'Endurance'. classes: comma list or nil (-> default by stat).
 function buff.regen_other(st, name, stat, pct, classes)
   if mq.TLO.Me.Invis() or mq.TLO.Me.Hovering() then return end
-  if st.combat.aggro_target_id ~= nil or mq.TLO.Me.CombatState() == 'COMBAT' then return end
+  if in_combat(st) then return end
   local set
   if classes and classes ~= '' and classes ~= '0' and classes:lower() ~= 'null' then
     set = {}; for c in (classes .. ','):gmatch('([^,]*),') do if c ~= '' then set[c] = 1 end end
@@ -445,6 +533,28 @@ local function oog_arm(st, id, name)
   st.buff.oog_timers[id] = os.clock() + math.max(secs, 60)
 end
 
+local function actor_oog_ids(st, max_range)
+  local out, seen = {}, {}
+  local peers = st.buff.peer_buffs_by_name or {}
+  local now = os.clock()
+  for _, peer in pairs(peers) do
+    if peer and (now - (peer.updated or 0)) <= 30 then
+      local id = tonumber(peer.id) or 0
+      if id == 0 and peer.name and peer.name ~= '' then
+        id = mq.TLO.Spawn('pc =' .. peer.name).ID() or 0
+      end
+      if id and id > 0 and not seen[id] then
+        local sp = mq.TLO.Spawn(id)
+        if (sp.Distance() or 9999) <= max_range then
+          seen[id] = true
+          out[#out + 1] = id
+        end
+      end
+    end
+  end
+  return out
+end
+
 -- One OOG target with class/stack/stick/dedup guards. Returns true on cast success.
 local function oog_try(st, en, name, id)
   if not id or id == 0 or id == mq.TLO.Me.ID() then return false end
@@ -473,20 +583,20 @@ function buff.oog_sweep(st, en, name, kind, brange)
           or (mq.TLO.Me.AltAbility(name).Rank() or 0) > 0) then return end
   if mq.TLO.Me.Invis() or mq.TLO.Me.Hovering() then return end
   local function aggro()
-    return st.combat.aggro_target_id ~= nil or mq.TLO.Me.CombatState() == 'COMBAT'
+    return in_combat(st)
   end
   local function in_group(cleanname)
     return cleanname and mq.TLO.Group.Member(cleanname).ID() ~= nil
   end
   if kind == 'raid' then
     for b = 0, (tonumber(mq.TLO.Raid.Members()) or 0) do
-      if aggro() and not st.flags.buff_mode then return end
+      if aggro() and not combat_ok(st, en) then return end
       local rm = mq.TLO.Raid.Member(b)
       if rm.ID() and not in_group(rm.CleanName()) then oog_try(st, en, name, rm.ID()) end
     end
   elseif kind == 'fellowship' then
     for b = 1, (tonumber(mq.TLO.Me.Fellowship.Members()) or 0) do
-      if aggro() and not st.flags.buff_mode then return end
+      if aggro() and not combat_ok(st, en) then return end
       local fname = mq.TLO.Me.Fellowship.Member(b)() or ''
       local fid = mq.TLO.Spawn('pc =' .. fname).ID()
       if fid and not in_group(mq.TLO.Spawn(fid).CleanName()) then oog_try(st, en, name, fid) end
@@ -495,7 +605,7 @@ function buff.oog_sweep(st, en, name, kind, brange)
     local cnt = tonumber(mq.TLO.SpawnCount('pc radius ' .. brange)()) or 0
     if not (st.flags.buff_mode or cnt <= 12) then return end
     for b = 2, cnt do
-      if aggro() and not st.flags.buff_mode then return end
+      if aggro() and not combat_ok(st, en) then return end
       local id = mq.TLO.NearestSpawn(b .. ',pc radius ' .. brange).ID()
       if id and not in_group(mq.TLO.Spawn(id).CleanName()) then oog_try(st, en, name, id) end
     end
@@ -509,8 +619,7 @@ function buff.check_oog(st, en, srange)
   if st.combat.chasing and not st.buff.while_chasing then return end
   local name = en.check_name
   local function combat_abort()
-    return (st.combat.aggro_target_id ~= nil or mq.TLO.Me.CombatState() == 'COMBAT')
-           and not st.flags.buff_mode
+    return in_combat(st) and not combat_ok(st, en)
   end
   local function eligible(id)
     return id and id ~= mq.TLO.Me.ID()
@@ -528,6 +637,14 @@ function buff.check_oog(st, en, srange)
   if combat_abort() then return end
   if oog.range and st.flags.buff_mode then
     buff.oog_sweep(st, en, name, 'range', oog.range)
+  end
+  if combat_abort() then return end
+  if oog.actors then
+    local actor_range = oog.range and math.min(oog.range, srange) or srange
+    for _, id in ipairs(actor_oog_ids(st, actor_range)) do
+      if eligible(id) then oog_try(st, en, name, id) end
+      if combat_abort() then return end
+    end
   end
   if combat_abort() then return end
   for _, slot in ipairs(oog.xtargets or {}) do
@@ -570,59 +687,69 @@ function buff.tick(st)
   if mq.TLO.Me.Invis() and not st.combat.aggro_target_id then return end
   -- ChaseAssist + !BuffWhileChasing (Phase 5 sets st.combat.chasing; nil => not chasing).
   if st.combat.chasing and not st.buff.while_chasing then return end
+  buff.write_buffs(st)
   -- combat / BuffMode gate (entry + per-iteration below). aggro_target_id is nil until
   -- Phase 4, so fall back to CombatState for real combat protection now.
-  local in_combat = st.combat.aggro_target_id ~= nil or mq.TLO.Me.CombatState() == 'COMBAT'
-  if in_combat and not st.flags.buff_mode then return end
+  local fighting = in_combat(st)
+  if fighting and not st.flags.buff_mode and not has_combat_buffs(st) then return end
   if os.clock() < (st.buff.read_deadline or 0) then return end
 
+  local checked_any = false
   for _, en in ipairs(st.buff.entries) do
     -- per-iteration combat re-check (macro re-runs GetHostilesOnXTarget each pass).
-    if (st.combat.aggro_target_id ~= nil or mq.TLO.Me.CombatState() == 'COMBAT')
-       and not st.flags.buff_mode then break end
     en.bufftype = en.bufftype or buff._bufftype(en.cast_name)
-    local rng = spell_range(en)
 
-    if en.tag == 'Mana' or en.tag == 'Managroup' or en.tag == 'Endgroup'
-       or en.tag == 'Mount' or en.tag == 'NoGroup' then
-      -- Mana/regen run in buff.run_mana; Mount/NoGroup not handled in 3a/3b.
-    elseif en.tag == 'End' then
-      buff.check_endurance(st, en)
-    elseif en.tag == 'Summon' then
-      buff.summon_stuff(st, en)
-    elseif en.tag == 'Once' then
-      buff.buff_once(st, en)
-    elseif en.tag == 'Remove' then
-      if mq.TLO.Me.Buff(en.cast_name).ID() then mq.cmdf('/removebuff %s', en.cast_name) end
-    elseif en.tag == 'Aura' then
-      buff.check_aura(st, en.cast_name)
-    elseif en.bufftype ~= 'command' then
-      local tt  = buff._target_type(en.check_name)
-      local handled = false
-
-      if en.tag == 'MA' or en.tag == 'DualMA' then
-        buff.check_ma(st, en, rng); handled = true
-      end
-
-      if not handled then
-        local grp = util.group_size() > 0
-        local self_only = (tt:lower() == 'self')
-        if grp and not self_only then
-          if buff.check_group(st, en, en.cast_name, en.check_name, rng) == false then
-            break  -- hostiles abort
+    if combat_ok(st, en) then
+      checked_any = true
+      if en.tag == 'Mana' or en.tag == 'Managroup' or en.tag == 'Endgroup'
+         or en.tag == 'Mount' or en.tag == 'NoGroup' then
+        -- Mana/regen run in buff.run_mana; Mount/NoGroup not handled in 3a/3b.
+      elseif en.bufftype == 'command' then
+        if ready(st, en.index, 'command')
+           and not (st.buff.cond_on and en.cond and en.cond ~= '' and not cond.eval(en.cond)) then
+          if cast.cast(en.cast_name, 'Buffs-command', mq.TLO.Me.ID()) == 'CAST_SUCCESS' then
+            arm_seconds(st, en.index, 'command', st.buff.check_secs or 10)
           end
-        else
-          buff.check_self(st, en)
         end
-      end
+      elseif en.tag == 'End' then
+        buff.check_endurance(st, en)
+      elseif en.tag == 'Summon' then
+        buff.summon_stuff(st, en)
+      elseif en.tag == 'Once' then
+        buff.buff_once(st, en)
+      elseif en.tag == 'Remove' then
+        if mq.TLO.Me.Buff(en.cast_name).ID() then mq.cmdf('/removebuff %s', en.cast_name) end
+      elseif en.tag == 'Aura' then
+        buff.check_aura(st, en.cast_name)
+      else
+        local rng = spell_range(en)
+        local tt  = buff._target_type(en.check_name)
+        local handled = false
 
-      -- Out-of-group targets (named/raid/fellowship/range).
-      buff.check_oog(st, en, rng)
+        if en.tag == 'MA' or en.tag == 'DualMA' then
+          buff.check_ma(st, en, rng); handled = true
+        end
+
+        if not handled then
+          local grp = util.group_size() > 0
+          local self_only = (tt:lower() == 'self')
+          if grp and not self_only then
+            if buff.check_group(st, en, en.cast_name, en.check_name, rng) == false then
+              break  -- hostiles abort
+            end
+          else
+            buff.check_self(st, en)
+          end
+        end
+
+        -- Out-of-group targets (named/raid/fellowship/range).
+        buff.check_oog(st, en, rng)
+      end
     end
   end
 
-  -- ReadBuffsTimer: set only when not in combat (macro @7620: !AggroTargetID).
-  if st.combat.aggro_target_id == nil and mq.TLO.Me.CombatState() ~= 'COMBAT' then
+  -- Keep combat-enabled buff scans throttled just like normal buff scans.
+  if checked_any or not fighting then
     st.buff.read_deadline = os.clock() + (st.buff.check_secs or 10)
   end
 end

@@ -11,10 +11,16 @@ local FIXTURE = here .. 'fixtures/sample.ini'
 local t = {}
 function t.run()
   local cfg = config.load(FIXTURE)
+  cfg.sections['Buffs'] = cfg.sections['Buffs'] or {}
+  cfg.sections['Buffs']['BuffsSize'] = '1'
+  cfg.sections['Buffs']['Buffs1'] = 'command:/sit'
+  cfg._lists = {}
   local st  = state.new(cfg)
 
   buff.setup(st)
   assert(#st.buff.entries == #st.lists.buffs, 'entry count mismatch')
+  assert(st.buff.entries[1].bufftype == 'command', 'command buff should retain command type')
+  assert(st.buff.entries[1].cast_name == 'command:/sit', 'command buff should retain cast prefix')
   for _, en in ipairs(st.buff.entries) do
     assert(en.cast_name and en.cast_name ~= '', 'entry missing cast_name')
     if en.is_dual then assert(en.check_name == en.part3, 'dual check_name should be part3') end

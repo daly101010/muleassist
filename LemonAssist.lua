@@ -98,14 +98,14 @@ clearXTar = function()
             if (not XT.AssistName() and XT.ID() ~= 0 and not PlayerDesignatedSlot(i)) or (XT.Type() == "Corpse" and XT.TargetType() == "Specific NPC") or (XT.Master.ID() ~= 0) then 
                 mq.cmdf('/xtarget set %i autohater',i)
                 if not XT.AssistName() then Write.Info(string.format("\ayRemoving XTarget \ao %s \aysince it is \ao %s",i,XT.AssistName())) end
-                mq.delay(5000, XT.TargetType() == "Auto Hater" )
+                mq.delay(5000, function() return XT.TargetType() == "Auto Hater" end)
             end
         else 
             --Write.Debug(string.format("2nd: %s %s |%s| |%s|",i,XT,XTi,XTt))
             if XTt == "UNKNOWN" then
                 mq.cmdf('/xtarget set %i autohater',i)
                 Write.Info(string.format("Broken XTarget detected. Attempting to fix slot %s",i))
-                mq.delay(5000, XT.TargetType() == "Auto Hater" )
+                mq.delay(5000, function() return XT.TargetType() == "Auto Hater" end)
                 
             end
         end

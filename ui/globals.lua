@@ -15,6 +15,7 @@ local globals = {
     Schema = nil, -- the loaded schema,
     MAUI_INI = nil,
     MAUI_Config = nil,
+    Runtime = nil, -- running MuleAssist state when MAUI is embedded in the bot
     Theme = 'default',
 }
 

@@ -11,6 +11,12 @@ local FIXTURE = here .. 'fixtures/sample.ini'
 local t = {}
 function t.run()
   local cfg = config.load(FIXTURE)
+  cfg.sections['Cures'] = cfg.sections['Cures'] or {}
+  cfg.sections['Cures']['CuresOn'] = '3'
+  cfg.sections['Cures']['CuresSize'] = '2'
+  cfg.sections['Cures']['Cures1'] = 'Remove Greater Curse|curse'
+  cfg.sections['Cures']['Cures2'] = 'Purify Soul|me'
+  cfg._lists = {}
   local st = state.new(cfg)
 
   -- Offline resolver: tag/name-based classification only.
@@ -18,6 +24,9 @@ function t.run()
   heal.setup(st, { class_short = 'CLR', class_name = 'Cleric' })
 
   assert(#st.heal.single + #st.heal.group >= 1, 'no heals categorized')
+  assert(#st.heal.cures == 2, 'cures not parsed')
+  assert(st.heal.cures[1].debuff_type == 'curse', 'cure debuff type not parsed')
+  assert(st.heal.cures[2].scope == 'me', 'cure me scope not parsed')
   assert(st.heal.single_point >= 1, 'single_point not computed')
   -- sorted desc by pct
   for k = 2, #st.heal.single do

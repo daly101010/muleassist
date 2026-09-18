@@ -12,6 +12,29 @@ local function pipe_split(s)
   return out
 end
 
+local BUFF_OPTION_TOKENS = {
+  combat = 'combat',
+  incombat = 'combat',
+  ['in-combat'] = 'combat',
+  combatok = 'combat',
+}
+
+local function split_buff_options(fields)
+  local base = {}
+  local opts = {}
+  base[1] = fields[1] or ''
+  for i = 2, #fields do
+    local tok = trim(fields[i] or '')
+    local opt = BUFF_OPTION_TOKENS[tok:lower()]
+    if opt then
+      opts[opt] = true
+    else
+      base[#base + 1] = fields[i]
+    end
+  end
+  return base, opts
+end
+
 -- Parse the OOG token list (after the 'OOG:' marker) into a structured table.
 local function parse_oog(list)
   local oog = { names = {}, xtargets = {} }
@@ -21,6 +44,7 @@ local function parse_oog(list)
       local low = tok:lower()
       if low == 'raid' then oog.raid = true
       elseif low == 'fellowship' then oog.fellowship = true
+      elseif low == 'actors' or low == 'actor' or low == 'muleassist' then oog.actors = true
       elseif low:sub(1, 5) == 'range' then oog.range = tonumber(tok:sub(6))
       elseif low:sub(1, 7) == 'xtarget' then oog.xtargets[#oog.xtargets + 1] = tonumber(tok:sub(8))
       else oog.names[#oog.names + 1] = tok end
@@ -34,6 +58,7 @@ local function emit_oog(oog)
   local toks = {}
   if oog.raid then toks[#toks + 1] = 'raid' end
   if oog.fellowship then toks[#toks + 1] = 'fellowship' end
+  if oog.actors then toks[#toks + 1] = 'actors' end
   if oog.range then toks[#toks + 1] = 'range' .. oog.range end
   for _, x in ipairs(oog.xtargets or {}) do toks[#toks + 1] = 'xtarget' .. x end
   for _, n in ipairs(oog.names or {}) do
@@ -56,7 +81,7 @@ function serialize.parse_buff(raw, cond)
     main = raw:sub(1, s - 1):gsub('|%s*$', '')   -- drop the trailing '|' before OOG:
   end
 
-  local f = pipe_split(main)
+  local f, opts = split_buff_options(pipe_split(main))
   local name = trim(f[1] or '')
   local prefix
   for _, p in ipairs({ 'item', 'command', 'summoned' }) do
@@ -64,6 +89,7 @@ function serialize.parse_buff(raw, cond)
   end
   e.name  = name
   e.prefix = prefix
+  e.cast_in_combat = opts.combat == true
   e.tag   = trim(f[2] or '')
   e.part3 = trim(f[3] or '')
   e.part4 = trim(f[4] or '')
@@ -106,6 +132,10 @@ function serialize.buff_to_string(e)
   -- Drop trailing empty fields for a canonical, minimal string.
   while #fields > 1 and fields[#fields] == '' do fields[#fields] = nil end
   local out = table.concat(fields, '|')
+
+  if e.cast_in_combat then
+    out = out .. '|combat'
+  end
 
   if e.oog then
     local toks = emit_oog(e.oog)

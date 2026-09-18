@@ -22,20 +22,17 @@ local apply_opts = nil       -- set by M.mount; holds on_apply callback
 local cfg_snapshot = nil     -- last-applied snapshot of globals.Config
 local apply_db = diff.debouncer(0.75)
 local trees_built = false
+local registered_window = nil
+local registered_imgui = {}
+local shutting_down = false
 
 globals.CurrentSchema = 'ma'
 globals.Schema = require('muleassist.ui.schemas.'..globals.CurrentSchema)
 
--- Animations for drawing spell/item icons
-local animSpellIcons = mq.FindTextureAnimation('A_SpellIcons')
-local animItems = mq.FindTextureAnimation('A_DragItem')
--- Blue and yellow icon border textures
-local animBlueWndPieces = mq.FindTextureAnimation('BlueIconBackground')
-animBlueWndPieces:SetTextureCell(1)
-local animYellowWndPieces = mq.FindTextureAnimation('YellowIconBackground')
-animYellowWndPieces:SetTextureCell(1)
-local animRedWndPieces = mq.FindTextureAnimation('RedIconBackground')
-animRedWndPieces:SetTextureCell(1)
+-- Keep MAUI unload-safe on MQ2Lua builds where Lua-owned CTextureAnimation userdata can
+-- fault during ImGui teardown. Plain buttons retain selection, drag/drop, and cursor drops.
+local draw_texture_icons = false
+local animSpellIcons, animItems, animRedWndPieces = nil, nil, nil
 
 -- UI State
 local open = true
@@ -50,6 +47,38 @@ local selectedUpgrade = nil
 local selectedSection = 'General' -- Left hand menu selected item
 
 local tloCache = cache:new(300, 300)
+
+local function destroy_imgui(name)
+    if not name or name == '' then return end
+    if mq.imgui and mq.imgui.exists and mq.imgui.destroy then
+        local ok_exists, exists = pcall(function() return mq.imgui.exists(name) end)
+        if ok_exists and exists then
+            pcall(function() mq.imgui.destroy(name) end)
+        end
+    elseif mq.imgui and mq.imgui.destroy then
+        pcall(function() mq.imgui.destroy(name) end)
+    end
+end
+
+local function unregister_imgui(name)
+    if not name or not registered_imgui[name] then return end
+    open = false
+    shouldDrawUI = false
+    shutting_down = true
+    registered_imgui[name] = nil
+    if registered_window == name then registered_window = nil end
+    destroy_imgui(name)
+end
+
+local function register_imgui(name, callback)
+    if registered_imgui[name] then return end
+    -- Clear stale callbacks from a previous crashed/stopped run before registering.
+    destroy_imgui(name)
+    shutting_down = false
+    mq.imgui.init(name, callback)
+    registered_imgui[name] = true
+    registered_window = name
+end
 
 globals.MyServer = mq.TLO.EverQuest.Server()
 globals.MyName = mq.TLO.Me.CleanName()
@@ -89,7 +118,7 @@ local TABLE_FLAGS = bit32.bor(ImGuiTableFlags.Hideable, ImGuiTableFlags.RowBg, I
 
 --local customSections = require('ma.addons.'..globals.CurrentSchema)
 local ok, customSections = pcall(require, 'muleassist.ui.addons.'..globals.CurrentSchema)
-if not ok then customSections = nil end
+if not ok then customSections = {} end
 
 local function SaveMAUIConfig()
     -- Reload the maui.ini before saving to try and prevent writing stale data
@@ -525,6 +554,36 @@ local BUFF_TAGS = { '', 'Me', 'MA', '!MA', '!ME', 'caster', 'Melee', 'class',
 local BUFF_PREFIXES = { '(none)', 'item', 'command', 'summoned' }
 local HEAL_TAGS = { '', 'MA', 'Me', '!MA', 'pet', '!pet', 'Mob', 'Tap', 'xtar' }
 
+local BUFF_TAG_HELP = {
+  [''] = 'Plain/group buff. MuleAssist checks group members when the spell can target others; self-only spells are checked on you only.\nExample: Temperance',
+  Me = 'Only buff yourself.\nExample: Shield of Order|Me',
+  MA = 'Only buff the configured MainAssist.\nExample: Skin Like Nature|MA',
+  ['!MA'] = 'Buff group members except the MainAssist.\nExample: Voice of Clairvoyance|!MA',
+  ['!ME'] = 'Buff group members except yourself.\nExample: Talisman of Celerity|!ME',
+  caster = 'Buff caster archetype classes only: CLR, DRU, SHM, BST, ENC, MAG, NEC, PAL, SHD, RNG, WIZ.\nExample: Clarity|caster',
+  Melee = 'Buff melee archetype classes only: BRD, BER, BST, MNK, PAL, ROG, RNG, SHD, WAR.\nExample: Haste|Melee',
+  class = 'Buff only the class short names listed in the Classes field.\nExample: Symbol|class|WAR,PAL,SHD',
+  Dual = 'Use a group spell for normal group buffing, but check the single-target spell name for whether each member already has it.\nExample: Talisman of Unity|Dual|Talisman of Celerity',
+  DualMA = 'Use the single-target form on the MainAssist.\nExample: Unity|Dual|Single Buff|MA',
+  DualMelee = 'Dual form restricted to melee archetype classes.',
+  DualCaster = 'Dual form restricted to caster archetype classes.',
+  DualClass = 'Dual form restricted to the class short names listed in Classes.',
+  DualMgb = 'Dual form that may fire Mass Group Buff when MGB is ready.',
+  mgb = 'Allows Mass Group Buff for this buff when MGB is ready.',
+  Aura = 'Maintains an aura-style spell/disc. The bot checks active aura names instead of normal buff slots.\nExample: Reverent Aura|Aura',
+  Mana = 'Self mana/endurance recovery entry. Trigger % is the resource threshold; Min HP % protects you from using it while too low.\nExample: Gather Mana|Mana|20|80',
+  Managroup = 'Cast a mana recovery spell on group members whose mana is at or below Trigger %. Optional Classes limits targets.\nExample: Quiet Miracle|Managroup|30||CLR,DRU,SHM',
+  Endgroup = 'Cast an endurance recovery spell on group members whose endurance is at or below Trigger %. Optional Classes limits targets.\nExample: Paragon|Endgroup|40',
+  End = 'Self endurance recovery entry. Trigger % is your endurance threshold; Min HP % protects you from using it while too low.\nExample: Rest|End|20|80',
+  Summon = 'Summon items until you have the requested count.\nExample: Summon Modulating Rod|Summon|Modulating Rod|5',
+  Once = 'Cast once per duration timer when ready and stacking allows it.\nExample: Familiar of the Emerald Jungle|Once',
+  Remove = 'Remove this buff from yourself when it is present.\nExample: Levitation|Remove',
+}
+
+local function buff_tag_help(tag)
+  return BUFF_TAG_HELP[tag or ''] or 'Buff option tag. Controls who MuleAssist checks and casts this entry on.'
+end
+
 -- Persistent per-entry working structs. The structured editors mutate these across frames
 -- (immediate mode) instead of re-parsing the INI string every frame, which would wipe
 -- transient UI state (an enabled-but-empty OOG, a freshly-added blank name row, etc.).
@@ -554,6 +613,10 @@ local function DrawOOGBuilder(idbase, oog)
   oog.raid = ImGui.Checkbox('Raid##oog'..idbase, oog.raid or false)
   ImGui.SameLine()
   oog.fellowship = ImGui.Checkbox('Fellowship##oog'..idbase, oog.fellowship or false)
+  ImGui.SameLine()
+  oog.actors = ImGui.Checkbox('MuleAssist actors##oog'..idbase, oog.actors or false)
+  ImGui.SameLine()
+  utils.HelpMarker('Buff every recently-seen MuleAssist actor client within this buff entry range. This uses the actors buff cache, then targets only clients that pass normal class, range, stack, and stick checks.\nINI: OOG:actors or OOG:actors,range150')
 
   local hasRange = oog.range ~= nil
   hasRange = ImGui.Checkbox('Range##oog'..idbase, hasRange)
@@ -591,6 +654,35 @@ end
 
 -- Shared hybrid condition editor. Returns the (possibly edited) condition string.
 local condRawMode = {}   -- [idbase] = true  (user forced raw)
+local function specialConditionLabel(key)
+    local labels = {
+        target_has_buff = 'Target has buff',
+        target_missing_buff = 'Target missing buff',
+        me_has_buff = 'Me has buff',
+        me_missing_buff = 'Me missing buff',
+        me_has_song = 'Me has song',
+        me_missing_song = 'Me missing song',
+        pet_has_buff = 'Pet has buff',
+        pet_missing_buff = 'Pet missing buff',
+        target_targeting_me = 'Target targeting me',
+        target_not_targeting_me = 'Target not targeting me',
+    }
+    return labels[key] or key
+end
+
+local function isSpecialConditionKey(key)
+    return cond_model.is_special_key(key)
+end
+
+local function isFlagConditionKey(key)
+    return cond_model.is_flag_key(key)
+end
+
+local function setConditionRowKey(row, key)
+    local nextRow = cond_model.default_row_for_key(key)
+    row.key, row.op, row.value = nextRow.key, nextRow.op, nextRow.value
+end
+
 local function DrawConditionBuilder(idbase, condString)
     condString = condString or ''
     if condString == 'NULL' then condString = '' end   -- stored 'no condition' sentinel
@@ -612,29 +704,81 @@ local function DrawConditionBuilder(idbase, condString)
     end
 
     local rows = parsed.rows
+    local logic = parsed.logic or {}
+    if #rows > 0 then
+        ImGui.TextDisabled('When ' .. cond_model.describe(rows, logic))
+    end
+    if ImGui.BeginCombo('Preset##preset'..idbase, 'Add preset') then
+        for i, preset in ipairs(cond_model.PRESETS) do
+            if ImGui.Selectable(preset.label, false) then
+                local presetRows, presetLogic = cond_model.preset_rows(i)
+                if #rows > 0 then logic[#rows] = 'and' end
+                for ri, presetRow in ipairs(presetRows or {}) do
+                    rows[#rows + 1] = presetRow
+                    if ri < #presetRows then logic[#rows] = (presetLogic and presetLogic[ri]) or 'and' end
+                end
+            end
+        end
+        ImGui.EndCombo()
+    end
     for ri, row in ipairs(rows) do
         ImGui.PushID(idbase..'r'..ri)
+        if ri > 1 then
+            ImGui.PushItemWidth(60)
+            local connector = logic[ri - 1] or 'and'
+            if ImGui.BeginCombo('##logic', connector) then
+                if ImGui.Selectable('and', connector == 'and') then logic[ri - 1] = 'and' end
+                if ImGui.Selectable('or', connector == 'or') then logic[ri - 1] = 'or' end
+                ImGui.EndCombo()
+            end
+            ImGui.PopItemWidth()
+            ImGui.SameLine()
+        end
         local subj = nil
         for _, s in ipairs(cond_model.SUBJECTS) do if s.key == row.key then subj = s end end
-        local label = subj and subj.label or row.key
+        local label = subj and subj.label or specialConditionLabel(row.key)
         if ImGui.BeginCombo('##subj', label) then
             for _, s in ipairs(cond_model.SUBJECTS) do
-                if ImGui.Selectable(s.label, s.key == row.key) then row.key = s.key; row.op = s.ops[1] end
+                if ImGui.Selectable(s.label, s.key == row.key) then setConditionRowKey(row, s.key) end
             end
-            if ImGui.Selectable('Target has buff', row.key=='target_has_buff') then row.key='target_has_buff'; row.op=nil end
-            if ImGui.Selectable('Target missing buff', row.key=='target_missing_buff') then row.key='target_missing_buff'; row.op=nil end
+            if ImGui.Selectable('Target has buff', row.key=='target_has_buff') then setConditionRowKey(row, 'target_has_buff') end
+            if ImGui.Selectable('Target missing buff', row.key=='target_missing_buff') then setConditionRowKey(row, 'target_missing_buff') end
+            if ImGui.Selectable('Me has buff', row.key=='me_has_buff') then setConditionRowKey(row, 'me_has_buff') end
+            if ImGui.Selectable('Me missing buff', row.key=='me_missing_buff') then setConditionRowKey(row, 'me_missing_buff') end
+            if ImGui.Selectable('Me has song', row.key=='me_has_song') then setConditionRowKey(row, 'me_has_song') end
+            if ImGui.Selectable('Me missing song', row.key=='me_missing_song') then setConditionRowKey(row, 'me_missing_song') end
+            if ImGui.Selectable('Pet has buff', row.key=='pet_has_buff') then setConditionRowKey(row, 'pet_has_buff') end
+            if ImGui.Selectable('Pet missing buff', row.key=='pet_missing_buff') then setConditionRowKey(row, 'pet_missing_buff') end
+            if ImGui.Selectable('Target targeting me', row.key=='target_targeting_me') then setConditionRowKey(row, 'target_targeting_me') end
+            if ImGui.Selectable('Target not targeting me', row.key=='target_not_targeting_me') then setConditionRowKey(row, 'target_not_targeting_me') end
             ImGui.EndCombo()
         end
         ImGui.SameLine()
-        if row.key == 'target_has_buff' or row.key == 'target_missing_buff' then
+        if isSpecialConditionKey(row.key) then
             ImGui.PushItemWidth(160)
             row.value = ImGui.InputText('##bval', row.value or '')
             ImGui.PopItemWidth()
+        elseif isFlagConditionKey(row.key) then
+            ImGui.TextDisabled('no value')
+        elseif cond_model.is_effect_key(row.key) then
+            local present = cond_model.effect_state(row)
+            local current = present and 'is' or 'is not'
+            ImGui.PushItemWidth(80)
+            if ImGui.BeginCombo('##effect', current) then
+                if ImGui.Selectable('is', present == true) then cond_model.set_effect_state(row, true) end
+                if ImGui.Selectable('is not', present == false) then cond_model.set_effect_state(row, false) end
+                ImGui.EndCombo()
+            end
+            ImGui.PopItemWidth()
         else
             local ops = (subj and subj.ops) or {'<','<=','>','>=','==','~='}
-            ImGui.PushItemWidth(60)
-            if ImGui.BeginCombo('##op', row.op or ops[1]) then
-                for _, o in ipairs(ops) do if ImGui.Selectable(o, o == row.op) then row.op = o end end
+            ImGui.PushItemWidth(110)
+            local selectedOp = row.op or ops[1]
+            if ImGui.BeginCombo('##op', cond_model.operator_label(selectedOp)) then
+                for _, o in ipairs(ops) do
+                    local opLabel = string.format('%s (%s)', cond_model.operator_label(o), o)
+                    if ImGui.Selectable(opLabel, o == row.op) then row.op = o end
+                end
                 ImGui.EndCombo()
             end
             ImGui.PopItemWidth()
@@ -643,16 +787,20 @@ local function DrawConditionBuilder(idbase, condString)
             ImGui.PopItemWidth()
         end
         ImGui.SameLine()
-        if ImGui.SmallButton('x') then table.remove(rows, ri) end
+        if ImGui.SmallButton('x') then
+            table.remove(rows, ri)
+            if ri <= #logic then table.remove(logic, ri) elseif ri > 1 then table.remove(logic, ri - 1) end
+        end
         ImGui.PopID()
     end
     if ImGui.SmallButton('+ condition##add'..idbase) then
-        rows[#rows+1] = { key='target_hp', op='<', value='100' }
+        if #rows > 0 then logic[#rows] = 'and' end
+        rows[#rows+1] = cond_model.default_row()
     end
     ImGui.SameLine()
     if ImGui.SmallButton('raw##forceraw'..idbase) then condRawMode[idbase] = true end
 
-    return cond_model.emit(rows)
+    return cond_model.emit(rows, logic)
 end
 
 -- Structured editor for a Buffs entry. Replaces the raw Name|Options fields.
@@ -706,7 +854,7 @@ local function DrawStructuredBuff(sectionName, valueKey, value)
     ImGui.EndCombo()
   end
   ImGui.PopItemWidth()
-  utils.HelpMarker(value['OptionsTooltip'] or '')
+  utils.HelpMarker(buff_tag_help(e.tag) .. '\n\n' .. (value['OptionsTooltip'] or ''))
 
   -- Tag-dependent fields with friendly labels.
   local isDual = e.tag:sub(1,4) == 'Dual'
@@ -714,34 +862,63 @@ local function DrawStructuredBuff(sectionName, valueKey, value)
     ImGui.PushItemWidth(260)
     e.part3 = ImGui.InputText('Single-target form##p3'..valueKey, e.part3 or '')
     ImGui.PopItemWidth()
+    utils.HelpMarker('The single-target version of this buff. MuleAssist uses this as the buff-name check, and DualMA casts this form directly on the MainAssist.\nExample: Group spell "Talisman of Unity", single-target form "Talisman of Celerity".')
   end
   if e.tag == 'class' then
     ImGui.PushItemWidth(260)
     e.part3 = ImGui.InputText('Classes (e.g. WAR,PAL)##p3'..valueKey, e.part3 or '')
     ImGui.PopItemWidth()
+    utils.HelpMarker('Comma-separated EQ class short names that should receive this buff.\nCommon examples: WAR,PAL,SHD for tanks; CLR,DRU,SHM for priests; MNK,ROG,BER for melee DPS.')
   elseif e.tag == 'DualClass' then
     ImGui.PushItemWidth(260)
     e.part5 = ImGui.InputText('Classes (e.g. WAR,PAL)##p5'..valueKey, e.part5 or '')
     ImGui.PopItemWidth()
+    utils.HelpMarker('Comma-separated EQ class short names for this dual-form buff.\nExample: WAR,PAL,SHD')
   elseif e.tag == 'End' then
     ImGui.PushItemWidth(100)
     e.part3 = ImGui.InputText('Endurance %##p3'..valueKey, e.part3 or '')
+    utils.HelpMarker('Cast this entry when your endurance is at or below this percent.\nExample: 20 means cast at 20% endurance or lower.')
     e.part4 = ImGui.InputText('Min HP %##p4'..valueKey, e.part4 or '')
+    utils.HelpMarker('Do not cast unless your HP is above this percent.\nExample: 80 means skip if you are at 80% HP or lower.')
     ImGui.PopItemWidth()
   elseif e.tag == 'Summon' then
     ImGui.PushItemWidth(200)
     e.part3 = ImGui.InputText('Item to summon##p3'..valueKey, e.part3 or '')
+    utils.HelpMarker('Inventory item name to keep stocked.\nExample: Modulating Rod')
     e.part4 = ImGui.InputText('Keep count##p4'..valueKey, e.part4 or '')
+    utils.HelpMarker('How many of the item to keep in inventory.\nExample: 5')
     ImGui.PopItemWidth()
   elseif e.tag == 'Mana' or e.tag == 'Managroup' or e.tag == 'Endgroup' then
     ImGui.PushItemWidth(100)
     e.part3 = ImGui.InputText('Trigger %##p3'..valueKey, e.part3 or '')
+    if e.tag == 'Endgroup' then
+      utils.HelpMarker('Cast on group members whose endurance is at or below this percent.\nExample: 40 means cast at 40% endurance or lower.')
+    elseif e.tag == 'Managroup' then
+      utils.HelpMarker('Cast on group members whose mana is at or below this percent.\nExample: 30 means cast at 30% mana or lower.')
+    else
+      utils.HelpMarker('Cast on yourself when your mana is at or below this percent.\nExample: 20 means cast at 20% mana or lower.')
+    end
     if e.tag == 'Mana' then e.part4 = ImGui.InputText('Min HP %##p4'..valueKey, e.part4 or '') end
+    if e.tag == 'Mana' then
+      utils.HelpMarker('Do not cast unless your HP is above this percent.\nExample: 80 means skip if you are at 80% HP or lower.')
+    end
+    if e.tag == 'Managroup' or e.tag == 'Endgroup' then
+      ImGui.PushItemWidth(260)
+      e.part5 = ImGui.InputText('Classes (optional)##p5'..valueKey, e.part5 or '')
+      ImGui.PopItemWidth()
+      utils.HelpMarker('Optional comma-separated class short names. Leave blank to use the default classes for this resource type.\nExamples: CLR,DRU,SHM for mana recovery; WAR,PAL,SHD,MNK,ROG,BER for endurance recovery.')
+    end
     ImGui.PopItemWidth()
   end
 
+  e.cast_in_combat = ImGui.Checkbox('Cast during combat##combat'..valueKey, e.cast_in_combat == true)
+  ImGui.SameLine()
+  utils.HelpMarker('Allows this buff entry to run while you are in combat. Spells must already be memmed; MuleAssist will not swap spell gems mid-combat.')
+
   -- OOG builder (enable state held in the persistent working struct so it doesn't revert).
   local oogOn = ImGui.Checkbox('Out-of-group targets##oog'..valueKey, e.oog ~= nil)
+  ImGui.SameLine()
+  utils.HelpMarker('Adds out-of-group targets after normal group checks.\nSupported targets: raid, fellowship, actors, rangeN, xtargetN, or explicit character names.\nExamples: OOG:actors or OOG:raid,Bob or OOG:fellowship,range150,xtarget2')
   if oogOn then
     e.oog = e.oog or { names = {}, xtargets = {} }
     DrawOOGBuilder(valueKey, e.oog)
@@ -1056,6 +1233,11 @@ local function DrawSpellIconOrButton(sectionName, key, index)
     end
     local charHasAbility = CharacterHasThing(iniValue)
     local iconSize = {30,30} -- default icon size
+    if not draw_texture_icons then
+        DrawPlainListButton(sectionName, key, index, iconSize)
+        DrawTooltip(iniValue)
+        return
+    end
     if type(index) == 'number' then
         local x,y = ImGui.GetCursorPos()
         if not charHasAbility then
@@ -1487,8 +1669,8 @@ end
 local function SetSchemaVars(selectedSchema)
     local ok, schemaMod = pcall(require, 'muleassist.ui.schemas.'..selectedSchema)
     if not ok then print('Error loading schema for: '..selectedSchema) return false end
-    ok, addonMod = pcall(require, 'addons.'..selectedSchema)
-    if not ok then print('Error loading schema for: '..selectedSchema) return false end
+    ok, addonMod = pcall(require, 'muleassist.ui.addons.'..selectedSchema)
+    if not ok then addonMod = {} end
 
     customSections = addonMod
     globals.Schema = schemaMod
@@ -1668,6 +1850,7 @@ local function pop_styles()
 end
 
 local MAUI = function()
+    if shutting_down then return end
     if not open then return end
     local used_theme = false
     if globals.Theme == 'red' then
@@ -1690,19 +1873,6 @@ local MAUI = function()
     end
     ImGui.End()
     if used_theme then pop_styles() end
-    -- Live-apply bridge: when embedded, debounce config edits -> flush INI -> reapply.
-    if apply_opts and globals.Config then
-        local now = os.clock()
-        if not cfg_snapshot then cfg_snapshot = diff.snapshot(globals.Config) end
-        if diff.changed(globals.Config, cfg_snapshot) then
-            cfg_snapshot = diff.snapshot(globals.Config)
-            apply_db:touch(now)
-        end
-        if apply_db:due(now) then
-            local ok = pcall(Save)             -- flush globals.Config -> bot INI (LIP)
-            if ok and apply_opts.on_apply then apply_opts.on_apply() end
-        end
-    end
 end
 
 local function CheckGameState()
@@ -1710,8 +1880,7 @@ local function CheckGameState()
         print('\arNot in game, stopping MAUI.\ax')
         open = false
         shouldDrawUI = false
-        mq.imgui.destroy('MuleAssist')
-        mq.exit()
+        terminate = true
     end
 end
 
@@ -1745,11 +1914,11 @@ local function NewSpellMemmed(line, spell)
         AddSpellToMap(spell)
     end
 
-    SortSpellMap()
+    SortMap(spells)
 end
 
 local function load_bot_ini()
-    globals.INIFile = globals.MAUI_Config['INIFile'] or utils.FindINIFile()
+    globals.INIFile = globals.MAUI_Config[maui_ini_key]['INIFile'] or utils.FindINIFile()
     if globals.INIFile and utils.FileExists(mq.configDir..'/'..globals.INIFile) then
         globals.Config = LIP.load(mq.configDir..'/'..globals.INIFile)
         globals.INIFileContents = utils.ReadRawINIFile()
@@ -1766,11 +1935,34 @@ local function build_trees()
     trees_built = true
 end
 
+local function reset_runtime_state()
+    open = true
+    shouldDrawUI = true
+    terminate = false
+    initialRun = true
+    memspell = nil
+    memgem = 0
+    shutting_down = false
+end
+
+local function cleanup_standalone()
+    open = false
+    shouldDrawUI = false
+    terminate = true
+    memspell = nil
+    memgem = 0
+    unregister_imgui('MuleAssist')
+    pcall(mq.unbind, '/maui')
+    pcall(mq.unevent, 'NewSpellMemmed')
+end
+
 -- Embed entry: host the panel inside another script (the bot). No keep-alive loop.
 -- opts.ini_path (the bot's st.cfg.path) locks the editor to the exact file the bot
 -- reloads, so live edits can't diverge to a different INI (e.g. a level-named variant).
 function M.mount(opts)
+    reset_runtime_state()
     apply_opts = opts or {}
+    globals.Runtime = apply_opts.state
     if apply_opts.ini_path and apply_opts.ini_path ~= '' then
         globals.INIFile = apply_opts.ini_path:match('[^/\\]+$')   -- basename Save() writes
         globals.Config = utils.FileExists(apply_opts.ini_path)
@@ -1783,48 +1975,85 @@ function M.mount(opts)
     -- Registration id MUST differ from the standalone's 'MuleAssist' or mq2lua's callback
     -- registry collides and crashes on unload (OnUnloadPlugin). Default to a bot-unique id.
     apply_opts.window = apply_opts.window or 'MuleAssistBot'
-    mq.imgui.init(apply_opts.window, function()
-        build_trees()
-        MAUI()
-    end)
+    if not registered_window then register_imgui(apply_opts.window, MAUI) end
 end
 
 function M.toggle() open = not open end
 function M.show()   open = true  end
+function M.tick()
+    if apply_opts then
+        build_trees()
+        tloCache:clean()
+        if globals.Config then
+            local now = os.clock()
+            if not cfg_snapshot then cfg_snapshot = diff.snapshot(globals.Config) end
+            if diff.changed(globals.Config, cfg_snapshot) then
+                cfg_snapshot = diff.snapshot(globals.Config)
+                apply_db:touch(now)
+            end
+            if apply_db:due(now) then
+                local ok = pcall(Save)
+                if ok and apply_opts.on_apply then apply_opts.on_apply() end
+            end
+        end
+    end
+end
+function M.reload()
+    if apply_opts and apply_opts.ini_path and apply_opts.ini_path ~= '' and utils.FileExists(apply_opts.ini_path) then
+        globals.Config = LIP.load(apply_opts.ini_path)
+        globals.INIFileContents = utils.ReadRawINIFile()
+        cfg_snapshot = diff.snapshot(globals.Config or {})
+    end
+end
 
 -- Tear down the registered ImGui callback. Call before the host script stops so mq2lua
 -- doesn't try to invoke/free a callback into a dead Lua state on unload.
 function M.unmount()
     open = false
-    if apply_opts and apply_opts.window then pcall(mq.imgui.destroy, apply_opts.window) end
+    shouldDrawUI = false
+    memspell = nil
+    memgem = 0
+    unregister_imgui(registered_window or (apply_opts and apply_opts.window))
+    globals.Runtime = nil
+    apply_opts = nil
+    cfg_snapshot = nil
 end
 
 -- Standalone entry: original /lua run muleassist/ui behavior (own loop + binds).
 function M.run_standalone()
+    reset_runtime_state()
+    globals.Runtime = nil
+    destroy_imgui('MuleAssist')
     load_bot_ini()
     mq.bind('/maui', BindMaui)
     mq.event('NewSpellMemmed', '#*#You have finished scribing #1#.', NewSpellMemmed)
-    mq.imgui.init('MuleAssist', MAUI)
+    register_imgui('MuleAssist', MAUI)
 
-    local init_done = false
-    while not terminate do
-        CheckGameState()
-        mq.doevents()
-        if not init_done then
-            InitSpellTree(); InitAATree(); InitDiscTree()
-            init_done = true
+    local ok, err = xpcall(function()
+        local init_done = false
+        while not terminate do
+            CheckGameState()
+            mq.doevents()
+            if not init_done then
+                InitSpellTree(); InitAATree(); InitDiscTree()
+                init_done = true
+            end
+            if memspell then
+                local rankname = mq.TLO.Spell(memspell).RankName()
+                mq.cmdf('/memspell %s "%s"', memgem, rankname)
+                mq.delay('3s', function() return mq.TLO.Me.Gem(memgem)() and mq.TLO.Me.Gem(memgem).Name() == rankname end)
+                mq.TLO.Window('SpellBookWnd').DoClose()
+                memspell = nil
+                memgem = 0
+            end
+            tloCache:clean()
+            mq.delay(20)
         end
-        if memspell then
-            local rankname = mq.TLO.Spell(memspell).RankName()
-            mq.cmdf('/memspell %s "%s"', memgem, rankname)
-            mq.delay('3s', function() return mq.TLO.Me.Gem(memgem)() and mq.TLO.Me.Gem(memgem).Name() == rankname end)
-            mq.TLO.Window('SpellBookWnd').DoClose()
-            memspell = nil
-            memgem = 0
-        end
-        tloCache:clean()
-        mq.delay(20)
+    end, debug.traceback)
+    if not ok then
+        print('\ar[MAUI] Runtime error: ' .. tostring(err) .. '\ax')
     end
+    cleanup_standalone()
 end
 
 if not _G.MULEASSIST_EMBED then

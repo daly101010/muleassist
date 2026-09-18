@@ -34,6 +34,8 @@ local schema = {
         'Merc',
         'AFKTools',
         'GMail',
+        'AutoClass',
+        'AutoClassCache',
         'MySpells',
         'SpellSet',
     },
@@ -215,6 +217,61 @@ local schema = {
             },
         },
     },
+    AutoClass={
+        Properties={
+            AutoClassOn={
+                Type='SWITCH',
+                Tooltip='Enable MuleAssist auto-class baseline suggestions and fill-empty MySpells generation.',
+            },
+            Family={
+                Type='STRING',
+                Tooltip='Baseline data family. Live is the only v1 family.',
+            },
+            Mode={
+                Type='STRING',
+                Tooltip='Class loadout mode. Default uses the default or first available loadout for the class.',
+            },
+            SuggestOnly={
+                Type='SWITCH',
+                Tooltip='Keep learned upgrades as suggestions instead of overwriting configured MySpells.',
+            },
+            FillEmptyMySpells={
+                Type='SWITCH',
+                Tooltip='Only fill empty MySpells Gem# slots when applying the baseline.',
+            },
+            FillEmptyLists={
+                Type='SWITCH',
+                Tooltip='Only fill empty MuleAssist action-list slots when applying the baseline.',
+            },
+        },
+    },
+    AutoClassCache={
+        Properties={
+            Family={ Type='STRING' },
+            Class={ Type='STRING' },
+            Level={ Type='NUMBER' },
+            Mode={ Type='STRING' },
+            LastScan={ Type='STRING' },
+            GemCount={ Type='NUMBER' },
+        },
+    },
+    MySpells={
+        Properties={
+            Gem1={ Type='SPELL', Tooltip='Spell memorized into gem 1 when LoadSpellSet=2.' },
+            Gem2={ Type='SPELL', Tooltip='Spell memorized into gem 2 when LoadSpellSet=2.' },
+            Gem3={ Type='SPELL', Tooltip='Spell memorized into gem 3 when LoadSpellSet=2.' },
+            Gem4={ Type='SPELL', Tooltip='Spell memorized into gem 4 when LoadSpellSet=2.' },
+            Gem5={ Type='SPELL', Tooltip='Spell memorized into gem 5 when LoadSpellSet=2.' },
+            Gem6={ Type='SPELL', Tooltip='Spell memorized into gem 6 when LoadSpellSet=2.' },
+            Gem7={ Type='SPELL', Tooltip='Spell memorized into gem 7 when LoadSpellSet=2.' },
+            Gem8={ Type='SPELL', Tooltip='Spell memorized into gem 8 when LoadSpellSet=2.' },
+            Gem9={ Type='SPELL', Tooltip='Spell memorized into gem 9 when LoadSpellSet=2.' },
+            Gem10={ Type='SPELL', Tooltip='Spell memorized into gem 10 when LoadSpellSet=2.' },
+            Gem11={ Type='SPELL', Tooltip='Spell memorized into gem 11 when LoadSpellSet=2.' },
+            Gem12={ Type='SPELL', Tooltip='Spell memorized into gem 12 when LoadSpellSet=2.' },
+            Gem13={ Type='SPELL', Tooltip='Spell memorized into gem 13 when LoadSpellSet=2.' },
+        },
+    },
     Melee={
         Controls={
             On={
@@ -275,7 +332,7 @@ local schema = {
             },
             TankAllMobs={ -- new beta?
                 Type='SWITCH',
-                Tooltip='',
+                Tooltip='0=Off/1=On - Tank add rescue. When tanking, briefly turns attack off, tells MuleAssist assist clients to hold DPS on the original target, targets camp adds on group/raid members, skips mezzed/rooted mobs, taunts only if you are not the aggro holder, navs to the add for Taunt if it is out of range but within 125, and uses ready Aggro entries when another group/raid member is the aggro holder. Returns to the original target and restores attack afterward.',
             }
         },
     },
@@ -335,7 +392,7 @@ local schema = {
                 Conditions=true,
                 Tooltip='Spell/Disc/Item/AA',
                 SizeTooltip='Sets the number of Buff# to parse. Similar function to DPSSize. (Speculation: if BuffsSize=10, then Buff11, Buff12, etc. will be ignored.)',
-                OptionsTooltip='What to buff. MA, Me, Melee, Caster, Class. Ex. melee|OOG:raid, dual|illusion: ondine wavefront.',
+                OptionsTooltip='Buff format: Spell|Tag|Param3|Param4|Param5. Tags include Me, MA, !MA, !ME, caster, Melee, class, Dual, Aura, Mana, Managroup, Endgroup, End, Summon, Once, Remove. Append |combat to allow this entry during combat. Add |OOG:actors,raid,fellowship,range150,xtarget2,Name for out-of-group targets. Examples: Symbol|class|WAR,PAL,SHD; Gather Mana|Mana|20|80; Paragon|Endgroup|40; Unity|Dual|Single Buff|MA|combat; Haste|Melee|OOG:actors,range150.',
                 CondTooltip='It will only cast the buff spell if the conditions equate to true.',
             },
             RebuffOn={

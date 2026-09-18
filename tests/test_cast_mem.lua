@@ -23,6 +23,16 @@ function t.run()
   assert(ok, 'mem_spell raised on invalid args: ' .. tostring(err))
   assert(issued == 0, 'mem_spell issued commands for invalid args (' .. issued .. ')')
 
+  local seen_cmd
+  local orig_delay = mq.delay
+  orig_cmd = mq.cmd
+  mq.cmd = function(cmd) seen_cmd = cmd end
+  mq.delay = function() end
+  local result = cast.cast('command:/sit', 'test-command')
+  mq.cmd, mq.delay = orig_cmd, orig_delay
+  assert(result == 'CAST_SUCCESS', 'command cast should report success')
+  assert(seen_cmd == '/docommand /sit', 'command cast issued unexpected command: ' .. tostring(seen_cmd))
+
   print('test_cast_mem: PASS (guards no-op)')
   return true
 end

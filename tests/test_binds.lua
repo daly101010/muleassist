@@ -33,8 +33,19 @@ function t.run()
   -- bind tables are present and well-formed
   assert(type(binds.TOGGLES) == 'table' and binds.TOGGLES.buffson[1] == 'Buffs',
     'TOGGLES table exposes buffson -> Buffs')
+  assert(binds.TOGGLES.cureson[1] == 'Cures' and binds.TOGGLES.cureson[2] == 'CuresOn',
+    'TOGGLES table exposes cureson -> Cures.CuresOn')
+  assert(binds.TOGGLES.targetswitching[1] == 'Melee'
+    and binds.TOGGLES.targetswitching[2] == 'TargetSwitchingOn',
+    'TOGGLES table exposes targetswitching -> Melee.TargetSwitchingOn')
+  assert(binds.TOGGLES.mercon[1] == 'Merc' and binds.TOGGLES.mercon[2] == 'MercOn',
+    'TOGGLES table exposes mercon -> Merc.MercOn')
   assert(type(binds.INTS) == 'table' and binds.INTS.assistat[2] == 'AssistAt',
     'INTS table exposes assistat -> AssistAt')
+  assert(binds.INTS.mercassistat[1] == 'Merc' and binds.INTS.mercassistat[2] == 'MercAssistAt',
+    'INTS table exposes mercassistat -> Merc.MercAssistAt')
+  assert(binds.INTS.afktoolson[1] == 'AFKTools' and binds.INTS.afktoolson[2] == 'AFKToolsOn',
+    'INTS table exposes afktoolson -> AFKTools.AFKToolsOn')
 
   os.remove(TMP)
   print('test_binds: PASS')

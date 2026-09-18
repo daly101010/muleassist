@@ -22,9 +22,10 @@ function t.run()
   eq(S.buff_to_string(e), 'Talisman|melee|OOG:raid,Bob', 'oog roundtrip')
 
   -- rangeN + fellowship + xtargetN tokens
-  e = S.parse_buff('Aura|caster|OOG:fellowship,range150,xtarget2', nil)
+  e = S.parse_buff('Aura|caster|OOG:fellowship,actors,range150,xtarget2', nil)
   eq(e.oog.fellowship, true, 'fellowship'); eq(e.oog.range, 150, 'range'); eq(e.oog.xtargets[1], 2, 'xtarget')
-  eq(S.buff_to_string(e), 'Aura|caster|OOG:fellowship,range150,xtarget2', 'oog multi roundtrip')
+  eq(e.oog.actors, true, 'actors')
+  eq(S.buff_to_string(e), 'Aura|caster|OOG:fellowship,actors,range150,xtarget2', 'oog multi roundtrip')
 
   -- non-OOG colon must NOT be treated as OOG
   e = S.parse_buff('Mask|Dual|illusion: foo', nil)
@@ -55,6 +56,22 @@ function t.run()
   e = S.parse_buff('summoned:Modulating Rod|Me', nil)
   eq(e.prefix, 'summoned'); eq(e.name, 'Modulating Rod')
   eq(S.buff_to_string(e), 'summoned:Modulating Rod|Me', 'summoned prefix roundtrip')
+
+  -- combat opt-in token can be appended without stealing tag-specific fields
+  e = S.parse_buff('Rune|combat', nil)
+  eq(e.tag, '', 'plain combat token is not a tag')
+  assert(e.cast_in_combat == true, 'plain combat token parsed')
+  eq(S.buff_to_string(e), 'Rune|combat', 'plain combat roundtrip')
+
+  e = S.parse_buff('Symbol|Me|combat', nil)
+  eq(e.tag, 'Me', 'combat token preserves tag')
+  assert(e.cast_in_combat == true, 'tagged combat token parsed')
+  eq(S.buff_to_string(e), 'Symbol|Me|combat', 'tagged combat roundtrip')
+
+  e = S.parse_buff('GroupForm|Dual|SingleForm|MA|combat', nil)
+  eq(e.tag, 'DualMA', 'combat token preserves dual fields')
+  assert(e.cast_in_combat == true, 'dual combat token parsed')
+  eq(S.buff_to_string(e), 'GroupForm|Dual|SingleForm|MA|combat', 'dual combat roundtrip')
 
   -- heal: name|pct|tag
   local h = S.parse_heal('Greater Healing|85|MA', '${Group.Injured[80]}')

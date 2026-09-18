@@ -34,6 +34,11 @@ local function tag_in(tag, set)
   for _, v in ipairs(set) do if tag == v then return true end end
   return false
 end
+local function norm_debuff_type(v)
+  v = (v or ''):lower()
+  if v == 'corrupt' then return 'corruption' end
+  return v
+end
 
 ----------------------------------------------------------------------
 -- Timer model (replaces Spell{i}GM{who} / SpellGH{j} / PetHealTimer{q}).
@@ -111,7 +116,31 @@ function heal.setup(st, me)
   table.sort(single, desc)
   table.sort(group, desc)
   st.heal.single, st.heal.group, st.heal.single_point = single, group, point
-  Write.Info('heal.setup: %d single, %d group heals (point=%d)', #single, #group, point)
+
+  local cures = {}
+  for _, e in ipairs(st.lists.cures) do
+    local spell_name = e.args[1] or e.spell or ''
+    if spell_name ~= '' and spell_name:lower() ~= 'null' then
+      local arg2 = (e.args[2] or ''):lower()
+      local arg3 = (e.args[3] or ''):lower()
+      local debuff_type, scope
+      if arg2 == 'me' then
+        debuff_type, scope = '', 'me'
+      else
+        debuff_type = norm_debuff_type(arg2)
+        scope = (arg3 == 'me') and 'me' or 'everyone'
+      end
+      cures[#cures + 1] = {
+        spell = spell_name,
+        debuff_type = debuff_type,
+        scope = scope,
+        cond = e.cond,
+        index = e.index,
+      }
+    end
+  end
+  st.heal.cures = cures
+  Write.Info('heal.setup: %d single, %d group heals, %d cures (point=%d)', #single, #group, #cures, point)
 end
 
 ----------------------------------------------------------------------
@@ -327,6 +356,163 @@ function heal.do_pet(st)
           Write.Info('%s on >> %s <<', e.spell, mq.TLO.Me.Pet.CleanName() or 'pet')
           arm_pet(st, i, heal_dur(st, e.spell))
           st.heal._again = 1
+        end
+      end
+    end
+  end
+end
+
+----------------------------------------------------------------------
+-- CheckCures: Cures#=Spell|DebuffType|Scope, CuresOn 1=known targets, 2=self,
+-- 3=group. DebuffType may be poison/disease/curse/corruption/mezzed or blank for any.
+----------------------------------------------------------------------
+local function safe_id(fn)
+  local ok, v = pcall(fn)
+  if not ok then return 0 end
+  return tonumber(v) or 0
+end
+
+local function debuff_state(st, id)
+  local me_id = mq.TLO.Me.ID()
+  local out
+  if id == me_id then
+    out = {
+      poison  = safe_id(function() return mq.TLO.Me.Poisoned.ID() end),
+      disease = safe_id(function() return mq.TLO.Me.Diseased.ID() end),
+      curse   = safe_id(function() return (mq.TLO.Me.Cursed.ID() or 0) + (mq.TLO.Me.Song('Restless Curse').ID() or 0) end),
+      corrupt = safe_id(function() return mq.TLO.Me.Corrupted.ID() end),
+      mezzed  = safe_id(function() return mq.TLO.Me.Mezzed.ID() end),
+    }
+    st.heal.group_debuffs[tostring(id)] = out
+    return out
+  end
+
+  out = st.heal.group_debuffs[tostring(id)]
+  if out then return out end
+
+  local old_target = mq.TLO.Target.ID() or 0
+  if old_target ~= id then
+    mq.cmdf('/target id %d', id)
+    mq.delay(500, function()
+      return mq.TLO.Target.ID() == id and util.mqbool(mq.TLO.Target.BuffsPopulated())
+    end)
+  elseif not util.mqbool(mq.TLO.Target.BuffsPopulated()) then
+    mq.delay(250, function() return util.mqbool(mq.TLO.Target.BuffsPopulated()) end)
+  end
+
+  if mq.TLO.Target.ID() ~= id then
+    if old_target ~= 0 and old_target ~= id then
+      mq.cmdf('/target id %d', old_target)
+    end
+    return { poison = 0, disease = 0, curse = 0, corrupt = 0, mezzed = 0 }
+  end
+
+  out = {
+    poison  = safe_id(function() return mq.TLO.Target.Poisoned.ID() end),
+    disease = safe_id(function() return mq.TLO.Target.Diseased.ID() end),
+    curse   = safe_id(function() return mq.TLO.Target.Cursed.ID() end),
+    corrupt = safe_id(function() return mq.TLO.Target.Corrupted.ID() end),
+    mezzed  = safe_id(function() return mq.TLO.Target.Mezzed.ID() end),
+  }
+
+  if old_target ~= 0 and old_target ~= id then
+    mq.cmdf('/target id %d', old_target)
+  end
+  return out
+end
+
+local function has_debuff(d, kind)
+  local total = (d.poison or 0) + (d.disease or 0) + (d.curse or 0) + (d.corrupt or 0) + (d.mezzed or 0)
+  if kind == '' then return total > 0 end
+  if kind == 'poison' then return (d.poison or 0) > 0 end
+  if kind == 'disease' then return (d.disease or 0) > 0 end
+  if kind == 'curse' then return (d.curse or 0) > 0 end
+  if kind == 'corruption' then return (d.corrupt or 0) > 0 end
+  if kind == 'mezzed' then return (d.mezzed or 0) > 0 end
+  return false
+end
+
+local function cure_timer_ready(st, idx, id)
+  local row = st.heal.cure_timers[idx]
+  return (not row) or (not row[id]) or os.clock() >= row[id]
+end
+
+local function arm_cure(st, idx, id, spell_name)
+  st.heal.cure_timers[idx] = st.heal.cure_timers[idx] or {}
+  local recast = mq.TLO.Spell(spell_name).RecastTime.TotalSeconds() or 0
+  st.heal.cure_timers[idx][id] = os.clock() + math.max(recast, 3)
+end
+
+local function in_group(id)
+  for gi = 0, util.group_size() do
+    local gm = mq.TLO.Group.Member(gi)
+    if (gm.ID() or 0) == id then return true end
+  end
+  return false
+end
+
+local function cure_targets(st)
+  local seen, out = {}, {}
+  local function add(id)
+    id = tonumber(id) or 0
+    if id ~= 0 and not seen[id] then
+      seen[id] = true
+      out[#out + 1] = id
+    end
+  end
+
+  local mode = st.heal.cures_on or 0
+  add(mq.TLO.Me.ID())
+  if mode ~= 2 then
+    for gi = 1, util.group_size() do add(mq.TLO.Group.Member(gi).ID()) end
+    if mode == 1 and st.heal.xtar and st.heal.xtar ~= '' and st.heal.xtar ~= '0' then
+      for slot in (st.heal.xtar .. '|'):gmatch('([^|]*)|') do
+        local s = tonumber(slot)
+        if s then add(mq.TLO.Me.XTarget(s).ID()) end
+      end
+    end
+  end
+  return out
+end
+
+function heal.write_debuffs(st)
+  local d = debuff_state(st, mq.TLO.Me.ID())
+  if st.comms and st.comms.broadcast_debuffs then
+    st.comms.broadcast_debuffs(st, d)
+  end
+end
+
+function heal.check_cures(st)
+  if st.flags.buff_mode or st.flags.zombie_mode then return end
+  if (st.heal.cures_on or 0) == 0 or #st.heal.cures == 0 then return end
+  if mq.TLO.Me.Hovering() then return end
+  if (mq.TLO.Me.Casting.ID() or 0) ~= 0 then return end
+  if mq.TLO.Me.Invis() and not st.combat.aggro_target_id then return end
+
+  heal.write_debuffs(st)
+  local me_id = mq.TLO.Me.ID()
+  for _, id in ipairs(cure_targets(st)) do
+    local sp = mq.TLO.Spawn(id)
+    local ty = sp.Type()
+    if ty ~= 'Corpse' and (sp.ID() or 0) ~= 0 and (sp.Distance() or 9999) <= 100 then
+      if st.heal.cures_on ~= 3 or in_group(id) then
+        local d = debuff_state(st, id)
+        for _, e in ipairs(st.heal.cures) do
+          if e.scope ~= 'me' or id == me_id then
+            if not (st.heal.cure_cond_on and e.cond and e.cond ~= '' and not cond.eval(e.cond)) then
+              if has_debuff(d, e.debuff_type or '') and cure_timer_ready(st, e.index, id) and cast.ready(e.spell) then
+                local tt = (mq.TLO.Spell(e.spell).TargetType() or ''):lower()
+                if not (tt:find('group v1', 1, true) and not in_group(id)) then
+                  Write.Info('Curing %s with %s', sp.CleanName() or tostring(id), e.spell)
+                  if cast.cast(e.spell, 'Cure', id) == 'CAST_SUCCESS' then
+                    arm_cure(st, e.index, id, e.spell)
+                    if id == me_id then heal.write_debuffs(st) end
+                    return
+                  end
+                end
+              end
+            end
+          end
         end
       end
     end

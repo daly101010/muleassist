@@ -12,6 +12,10 @@ function t.run()
   assert(cfg:get('General', 'Role', 'x') ~= 'x', 'General.Role missing')
   assert(cfg:bool('Pet', 'PetOn', false) == true, 'PetOn should be true in fixture')
   assert(type(cfg:num('Melee', 'AssistAt', 0)) == 'number', 'AssistAt not numeric')
+  assert(cfg:bool('AutoClass', 'AutoClassOn', false) == true, 'AutoClassOn should be true in fixture')
+  assert(cfg:get('AutoClass', 'Family', nil) == 'Live', 'AutoClass.Family missing')
+  assert(cfg:get('MySpells', 'Gem1', nil) == 'Envenomed Bolt', 'MySpells.Gem1 missing')
+  assert(cfg:get('MySpells', 'Gem3', nil) == 'NULL', 'MySpells.Gem3 should preserve NULL')
 
   local dps = cfg:list('dps')
   assert(#dps >= 1, 'dps list empty')
@@ -30,6 +34,13 @@ function t.run()
   local h2
   for _, e in ipairs(heals) do if e.spell == 'Complete Healing' then h2 = e end end
   assert(h2 and h2.args[2] == '60' and h2.args[3] == 'MA', 'three-field split failed')
+
+  local dflt = config.default{ path = 'memory.ini', class = 'Cleric', level = 60, role = 'None' }
+  assert(dflt:get('General', 'Role', nil) == 'Assist', 'default should normalize role None to Assist')
+  assert(dflt:bool('AutoClass', 'AutoClassOn', false) == true, 'default should enable AutoClass')
+  assert(dflt:num('SpellSet', 'LoadSpellSet', 0) == 2, 'default should use MySpells spellset mode')
+  assert(dflt:num('Melee', 'AssistAt', 0) == 95, 'default AssistAt missing')
+  assert(dflt:bool('AutoClass', 'FillEmptyLists', false) == true, 'default should enable list baseline fill')
 
   print('test_config: PASS ('..#dps..' dps entries)')
   return true

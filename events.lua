@@ -11,6 +11,20 @@ local Write = require('muleassist.Write')
 local cast  = require('muleassist.cast')
 local util  = require('muleassist.util')
 local events = {}
+local registered = {
+  'ma_cast_fizzle1',
+  'ma_cast_fizzle2',
+  'ma_cast_interrupt',
+  'ma_cast_resist',
+  'ma_cast_distr1',
+  'ma_cast_distr2',
+  'ma_cast_mezimmune',
+  'ma_mezbroke',
+  'ma_wornoff',
+  'ma_charmed',
+  'ma_cannotcharm',
+  'ma_concheck',
+}
 
 function events.register(st)
   -- Fizzles -> CAST_FIZZLED (macro @199-200, Event_CastFailed)
@@ -90,6 +104,12 @@ function events.register(st)
   end)
 
   Write.Info('events: cast-outcome + CC/charm handlers registered')
+end
+
+function events.unregister()
+  for _, name in ipairs(registered) do
+    pcall(mq.unevent, name)
+  end
 end
 
 return events

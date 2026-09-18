@@ -20,6 +20,9 @@ function t.run()
   assert(type(st.heal) == 'table', 'st.heal missing')
   assert(st.heal.duration_mod ~= nil, 'duration_mod missing')
   assert(type(st.heal.timers) == 'table', 'heal.timers missing')
+  assert(type(st.heal.cures) == 'table', 'heal.cures missing')
+  assert(type(st.heal.cure_timers) == 'table', 'heal.cure_timers missing')
+  assert(st.heal.cures_on == 0, 'CuresOn default from fixture should be 0')
   assert(type(st.hooks) == 'table', 'st.hooks missing')
   assert(type(st.combat) == 'table', 'st.combat missing')
   assert(st.flags.buff_mode == false, 'buff_mode default')
@@ -41,11 +44,34 @@ function t.run()
   assert(type(st.combat.aggro) == 'table' and type(st.combat.debuffs) == 'table',
     'combat aggro/debuffs tables missing')
   assert(st.combat.aggro_on == false, 'default AggroOn false')
+  assert(st.combat.tank_all_mobs == false, 'TankAllMobs from fixture should be false')
   assert(type(st.combat.debuff_all) == 'table', 'combat.debuff_all runtime table')
   assert(st.combat.debuff_all_on == 0, 'DebuffAllOn default 0 (fixture)')
+  assert(st.combat.target_switching_on == false, 'TargetSwitchingOn defaults false')
+  assert(st.combat.manual_target_mode == false, 'ManualTargetMode defaults false')
+  assert(st.combat.passive_mob_count == 0, 'passive_mob_count runtime default')
 
   assert(type(st.med) == 'table', 'st.med missing')
   assert(st.med.start == 20, 'MedStart from fixture (20)')
+
+  assert(type(st.afk) == 'table', 'st.afk missing')
+  assert(st.afk.on == 1, 'AFKToolsOn from fixture (1)')
+  assert(st.afk.gm_action == 1, 'AFKGMAction from fixture (1)')
+  assert(st.afk.pc_radius == 500, 'AFKPCRadius from fixture (500)')
+  assert(st.flags.afk_hold == false, 'afk_hold runtime default')
+
+  assert(type(st.bard) == 'table', 'st.bard missing')
+  assert(st.bard.twist_on == false, 'TwistOn from fixture (0)')
+  assert(st.bard.melee_on == 0, 'MeleeTwistOn default 0')
+  assert(st.bard.twisting == false, 'bard twisting runtime default')
+
+  assert(type(st.merc) == 'table', 'st.merc missing')
+  assert(st.merc.on == false, 'MercOn from fixture (0)')
+  assert(st.merc.assist_at == 92, 'MercAssistAt from fixture (92)')
+  assert(st.merc.assisting == 0, 'merc assisting runtime default')
+
+  assert(type(st.loot) == 'table', 'st.loot missing')
+  assert(st.loot.on == false, 'LootOn from fixture (0)')
 
   assert(type(st.move) == 'table', 'st.move missing')
   assert(st.move.chase_distance == 25, 'default ChaseDistance 25')
@@ -80,6 +106,7 @@ function t.run()
   st.camp.x = 111
   st.pull.state = 'outbound'
   st.combat.aggro_target_id = 999
+  st.bard.current_twist = '1 2 3'
   cfg.sections['Melee'] = cfg.sections['Melee'] or {}
   cfg.sections['Melee']['AssistAt'] = '77'
   state.apply_config(st, cfg)
@@ -87,6 +114,7 @@ function t.run()
   assert(st.camp.x == 111, 'apply_config preserves camp.x (runtime)')
   assert(st.pull.state == 'outbound', 'apply_config preserves pull.state (runtime)')
   assert(st.combat.aggro_target_id == 999, 'apply_config preserves combat runtime')
+  assert(st.bard.current_twist == '1 2 3', 'apply_config preserves bard runtime')
 
   print('test_state: PASS')
   return true
